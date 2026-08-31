@@ -1,0 +1,34 @@
+# Portable runtime and browser state — never leaves this machine
+.python/
+profile/
+profiles/
+.runtime/
+storage_state.json
+
+# Account-scoped configuration (see *.example.json)
+control_config.json
+claude_project.json
+project_prompt_leases.json
+.project_prompt_leases.json.*.tmp
+
+# Secrets
+.env
+.env.local
+
+# Process state
+.server.pid
+.supervisor.pid
+.supervisor.lock
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/

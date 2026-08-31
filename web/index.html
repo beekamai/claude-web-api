@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>OpenClaude Control</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='4' fill='%23075fe9'/%3E%3Cpath d='m12 3 7 4v10l-7 4-7-4V7l7-4Zm0 8 7-4m-7 4L5 7m7 4v10' fill='none' stroke='white' stroke-width='1.7' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/control/assets/styles.css">
+  </head>
+  <body>
+    <svg class="svg-sprite" aria-hidden="true">
+      <symbol id="icon-logo" viewBox="0 0 24 24">
+        <path d="m12 2 8 4.6v10.8L12 22l-8-4.6V6.6L12 2Z"/>
+        <path d="m4.4 6.9 7.6 4.4 7.6-4.4M12 11.3V22M8.1 9l7.8 4.5v4.2"/>
+      </symbol>
+      <symbol id="icon-overview" viewBox="0 0 24 24">
+        <rect x="3" y="3" width="7" height="7" rx="1"/>
+        <rect x="14" y="3" width="7" height="7" rx="1"/>
+        <rect x="3" y="14" width="7" height="7" rx="1"/>
+        <rect x="14" y="14" width="7" height="7" rx="1"/>
+      </symbol>
+      <symbol id="icon-user" viewBox="0 0 24 24">
+        <circle cx="12" cy="8" r="4"/>
+        <path d="M4.7 21v-2.3a7.3 7.3 0 0 1 14.6 0V21"/>
+      </symbol>
+      <symbol id="icon-users" viewBox="0 0 24 24">
+        <circle cx="9" cy="7.5" r="3.5"/>
+        <path d="M2.8 19v-2a6.2 6.2 0 0 1 12.4 0v2M16.3 4.4a3.5 3.5 0 0 1 0 6.2M17 13.2a6 6 0 0 1 4.2 5.8"/>
+      </symbol>
+      <symbol id="icon-model" viewBox="0 0 24 24">
+        <path d="m12 2 8 5v10l-8 5-8-5V7l8-5Z"/>
+        <path d="m4 7 8 5 8-5M12 12v10"/>
+      </symbol>
+      <symbol id="icon-behavior" viewBox="0 0 24 24">
+        <path d="M3 7h18M3 17h18"/>
+        <path d="M8 4v6M16 14v6"/>
+        <circle cx="8" cy="7" r="2"/>
+        <circle cx="16" cy="17" r="2"/>
+      </symbol>
+      <symbol id="icon-diagnostics" viewBox="0 0 24 24">
+        <rect x="3" y="3" width="18" height="18" rx="3"/>
+        <path d="M7 16v-3M12 16V8M17 16v-6"/>
+      </symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14"/>
+      </symbol>
+      <symbol id="icon-refresh" viewBox="0 0 24 24">
+        <path d="M20 7v5h-5M4 17v-5h5"/>
+        <path d="M18.1 9A7 7 0 0 0 6.3 6.3L4 9M5.9 15A7 7 0 0 0 17.7 17.7L20 15"/>
+      </symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24">
+        <path d="m5 5 14 14M19 5 5 19"/>
+      </symbol>
+      <symbol id="icon-external" viewBox="0 0 24 24">
+        <path d="M14 4h6v6M20 4l-9 9"/>
+        <path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/>
+      </symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24">
+        <path d="m5 12 4.2 4.2L19 6.5"/>
+      </symbol>
+      <symbol id="icon-alert" viewBox="0 0 24 24">
+        <path d="M12 3 2.7 20h18.6L12 3Z"/>
+        <path d="M12 9v5M12 17.5h.01"/>
+      </symbol>
+      <symbol id="icon-clock" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"/>
+        <path d="M12 7v5l3.5 2"/>
+      </symbol>
+      <symbol id="icon-lock" viewBox="0 0 24 24">
+        <rect x="4" y="10" width="16" height="11" rx="2"/>
+        <path d="M8 10V7a4 4 0 0 1 8 0v3"/>
+      </symbol>
+      <symbol id="icon-folder" viewBox="0 0 24 24">
+        <path d="M3 7.5h7l2-2h9v13.2a1.3 1.3 0 0 1-1.3 1.3H4.3A1.3 1.3 0 0 1 3 18.7V7.5Z"/>
+      </symbol>
+      <symbol id="icon-play" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"/>
+        <path d="m10 8 6 4-6 4V8Z"/>
+      </symbol>
+      <symbol id="icon-brain" viewBox="0 0 24 24">
+        <path d="M9.5 4.5A3 3 0 0 0 4.8 7a3.5 3.5 0 0 0-.4 6.8A3.5 3.5 0 0 0 9.5 18v-13.5ZM14.5 4.5A3 3 0 0 1 19.2 7a3.5 3.5 0 0 1 .4 6.8 3.5 3.5 0 0 1-5.1 4.2V4.5Z"/>
+        <path d="M9.5 8H7M14.5 8H17M9.5 13H7M14.5 13H17"/>
+      </symbol>
+      <symbol id="icon-shield" viewBox="0 0 24 24">
+        <path d="M12 2.5 20 6v5.3c0 5.1-3.3 8.5-8 10.2-4.7-1.7-8-5.1-8-10.2V6l8-3.5Z"/>
+      </symbol>
+      <symbol id="icon-chevron" viewBox="0 0 24 24">
+        <path d="m9 6 6 6-6 6"/>
+      </symbol>
+      <symbol id="icon-copy" viewBox="0 0 24 24">
+        <rect x="8" y="8" width="12" height="12" rx="2"/>
+        <path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>
+      </symbol>
+    </svg>
+
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand" href="#overview" aria-label="OpenClaude Control">
+          <svg><use href="#icon-logo"/></svg>
+          <span>OpenClaude Control</span>
+        </a>
+
+        <nav class="main-nav" aria-label="Разделы панели">
+          <a class="nav-item is-active" href="#overview" data-route="overview" aria-label="Обзор">
+            <svg><use href="#icon-overview"/></svg><span>Обзор</span>
+          </a>
+          <a class="nav-item" href="#profiles" data-route="profiles" aria-label="Профили">
+            <svg><use href="#icon-users"/></svg><span>Профили</span>
+          </a>
+          <a class="nav-item" href="#models" data-route="models" aria-label="Модели">
+            <svg><use href="#icon-model"/></svg><span>Модели</span>
+          </a>
+          <a class="nav-item" href="#behavior" data-route="behavior" aria-label="Поведение">
+            <svg><use href="#icon-behavior"/></svg><span>Поведение</span>
+          </a>
+          <a class="nav-item" href="#activity" data-route="activity" aria-label="Активность">
+            <svg><use href="#icon-diagnostics"/></svg><span>Активность</span>
+          </a>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="service-indicator" id="service-indicator">
+            <span class="status-dot status-dot--muted"></span>
+            <span>Проверяем сервис…</span>
+          </div>
+          <span class="app-version" id="app-version"></span>
+        </div>
+      </aside>
+
+      <main class="main-content" id="main-content">
+        <div class="global-error" id="global-error" role="alert" hidden>
+          <svg><use href="#icon-alert"/></svg>
+          <div>
+            <strong>Не удалось обновить панель</strong>
+            <span id="global-error-text"></span>
+          </div>
+          <button class="button button--quiet" type="button" data-action="refresh">Повторить</button>
+        </div>
+
+        <section class="page is-active" data-page="overview" aria-labelledby="overview-title">
+          <header class="page-header">
+            <div>
+              <h1 id="overview-title">Обзор</h1>
+              <p class="page-subtitle">Профиль, режимы и состояние локального шлюза.</p>
+            </div>
+            <button class="button button--outline" type="button" data-action="open-profile-drawer">
+              <svg><use href="#icon-plus"/></svg>Добавить профиль
+            </button>
+          </header>
+
+          <section class="profile-hero panel" aria-label="Активный профиль">
+            <div class="profile-identity">
+              <span class="avatar"><svg><use href="#icon-user"/></svg></span>
+              <div>
+                <h2 id="overview-profile-name">—</h2>
+                <p>Выбранный профиль</p>
+              </div>
+            </div>
+            <dl class="profile-facts">
+              <div>
+                <dt>Аккаунт</dt>
+                <dd id="overview-account">—</dd>
+              </div>
+              <div>
+                <dt>Email</dt>
+                <dd id="overview-email">—</dd>
+              </div>
+              <div>
+                <dt>Состояние</dt>
+                <dd id="overview-auth-state">—</dd>
+              </div>
+              <div>
+                <dt>Модель</dt>
+                <dd>
+                  <select id="overview-model" class="select select--compact" aria-label="Модель активного профиля" disabled>
+                    <option>—</option>
+                  </select>
+                </dd>
+              </div>
+            </dl>
+            <button class="button button--quiet" type="button" data-action="check-active-login">
+              <svg><use href="#icon-refresh"/></svg>Проверить доступ
+            </button>
+          </section>
+
+          <div class="overview-grid">
+            <section class="panel behavior-summary">
+              <header class="panel-header">
+                <h2>Настройки поведения</h2>
+              </header>
+              <div class="settings-list">
+                <div class="setting-row">
+                  <span class="setting-icon"><svg><use href="#icon-play"/></svg></span>
+                  <div class="setting-copy">
+                    <strong>Потоковая выдача</strong>
+                    <span>Текст появляется сразу в OpenClaude</span>
+                  </div>
+                  <label class="switch">
+                    <input id="overview-streaming" type="checkbox" data-behavior-key="streaming">
+                    <span aria-hidden="true"></span>
+                    <span class="sr-only">Потоковая выдача</span>
+                  </label>
+                </div>
+                <div class="setting-row">
+                  <span class="setting-icon"><svg><use href="#icon-brain"/></svg></span>
+                  <div class="setting-copy"><strong>Показывать thinking</strong></div>
+                  <select class="select select--compact" id="overview-thinking" data-behavior-key="thinking">
+                    <option value="off">Не показывать</option>
+                    <option value="auto">Если доступно</option>
+                    <option value="show">Показывать</option>
+                  </select>
+                </div>
+                <div class="setting-row">
+                  <span class="setting-icon"><svg><use href="#icon-shield"/></svg></span>
+                  <div class="setting-copy"><strong>Приватность чатов</strong></div>
+                  <span class="value-label" id="overview-privacy-label">—</span>
+                </div>
+                <div class="setting-row">
+                  <span class="setting-icon"><svg><use href="#icon-user"/></svg></span>
+                  <div class="setting-copy"><strong>Режим общения</strong></div>
+                  <span class="value-label" id="overview-persona-label">—</span>
+                </div>
+              </div>
+              <a class="panel-link" href="#behavior">Все настройки <svg><use href="#icon-chevron"/></svg></a>
+            </section>
+
+            <section class="panel response-panel">
+              <header class="panel-header">
+                <h2>Текущий ответ</h2>
+              </header>
+              <div class="response-body" id="current-response">
+                <div class="empty-state">
+                  <p>Нет активной генерации</p>
+                  <span>Здесь появится поток ответа, если backend передаёт состояние генерации.</span>
+                </div>
+              </div>
+              <div class="response-meta" id="response-meta" hidden></div>
+            </section>
+
+            <section class="panel system-panel">
+              <header class="panel-header">
+                <h2>Состояние</h2>
+              </header>
+              <div class="system-list" id="overview-system-list">
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+              </div>
+              <div class="system-summary" id="system-summary">
+                <span class="spinner"></span>Проверяем компоненты…
+              </div>
+            </section>
+          </div>
+
+          <section class="panel event-panel">
+            <header class="panel-header panel-header--actions">
+              <h2>Журнал событий</h2>
+              <button class="button button--quiet" type="button" data-action="refresh">
+                <svg><use href="#icon-refresh"/></svg>Обновить
+              </button>
+            </header>
+            <div class="event-table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr><th>Время</th><th>Уровень</th><th>Компонент</th><th>Сообщение</th></tr>
+                </thead>
+                <tbody id="overview-events"></tbody>
+              </table>
+              <div class="table-empty" id="overview-events-empty">Событий пока нет</div>
+            </div>
+          </section>
+        </section>
+
+        <section class="page" data-page="profiles" aria-labelledby="profiles-title">
+          <header class="page-header">
+            <div>
+              <h1 id="profiles-title">Профили</h1>
+              <p class="page-subtitle">Отдельный локальный браузерный профиль для каждого аккаунта.</p>
+            </div>
+            <button class="button button--primary" type="button" data-action="open-profile-drawer">
+              <svg><use href="#icon-plus"/></svg>Добавить профиль
+            </button>
+          </header>
+
+          <section class="panel panel--flush profile-table-panel">
+            <div class="event-table-wrap">
+              <table class="data-table profile-table">
+                <thead>
+                  <tr>
+                    <th>Профиль</th><th>Провайдер</th><th>Аккаунт</th><th>Модель</th><th>Состояние</th><th>Последняя проверка</th><th><span class="sr-only">Действия</span></th>
+                  </tr>
+                </thead>
+                <tbody id="profiles-table-body"></tbody>
+              </table>
+              <div class="table-empty" id="profiles-empty">Профили не найдены</div>
+            </div>
+          </section>
+        </section>
+
+        <section class="page" data-page="models" aria-labelledby="models-title">
+          <header class="page-header">
+            <div>
+              <h1 id="models-title">Модели</h1>
+              <p class="page-subtitle">Доступность определяется отдельно для каждого авторизованного аккаунта.</p>
+            </div>
+            <button class="button button--outline" type="button" data-action="refresh">
+              <svg><use href="#icon-refresh"/></svg>Проверить снова
+            </button>
+          </header>
+
+          <div class="model-layout">
+            <section class="panel model-profile-list">
+              <header class="panel-header"><h2>Профили</h2></header>
+              <div id="model-profile-selector"></div>
+            </section>
+            <section class="panel model-catalog">
+              <header class="panel-header">
+                <div>
+                  <h2 id="model-catalog-title">Доступные модели</h2>
+                  <p id="model-catalog-subtitle"></p>
+                </div>
+              </header>
+              <div id="model-catalog-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page" data-page="behavior" aria-labelledby="behavior-title">
+          <header class="page-header">
+            <div>
+              <h1 id="behavior-title">Поведение</h1>
+              <p class="page-subtitle">Общие режимы ответов для активного профиля.</p>
+            </div>
+            <span class="save-state" id="behavior-save-state" aria-live="polite"></span>
+          </header>
+
+          <div class="behavior-layout">
+            <section class="panel settings-section">
+              <header class="panel-header">
+                <div>
+                  <h2>Вывод ответа</h2>
+                  <p>Как OpenClaude получает и показывает генерацию.</p>
+                </div>
+              </header>
+              <div class="form-setting">
+                <div>
+                  <label for="behavior-streaming">Потоковая выдача</label>
+                  <p>Отправлять части ответа в OpenClaude сразу после получения.</p>
+                </div>
+                <label class="switch">
+                  <input id="behavior-streaming" type="checkbox" data-behavior-key="streaming">
+                  <span aria-hidden="true"></span>
+                  <span class="sr-only">Потоковая выдача</span>
+                </label>
+              </div>
+              <div class="form-setting">
+                <div>
+                  <label for="behavior-thinking">Thinking</label>
+                  <p>Показывать только provider summary, если Claude её отдаёт. Скрытая цепочка мыслей недоступна.</p>
+                </div>
+                <select class="select" id="behavior-thinking" data-behavior-key="thinking">
+                  <option value="off">Не показывать</option>
+                  <option value="auto">Если доступно</option>
+                  <option value="show">Показывать</option>
+                </select>
+              </div>
+            </section>
+
+            <section class="panel settings-section">
+              <header class="panel-header">
+                <div>
+                  <h2>Приватность</h2>
+                  <p>Что делать с удалённым чатом после завершения ответа.</p>
+                </div>
+              </header>
+              <fieldset class="choice-grid" id="privacy-options">
+                <legend class="sr-only">Приватность чатов</legend>
+                <label class="choice-card">
+                  <input type="radio" name="privacy" value="keep" data-behavior-key="privacy">
+                  <span>
+                    <strong>Обычный</strong>
+                    <small>Оставлять чат в claude.ai</small>
+                  </span>
+                </label>
+                <label class="choice-card">
+                  <input type="radio" name="privacy" value="ephemeral" data-behavior-key="privacy">
+                  <span>
+                    <strong>Эфемерный</strong>
+                    <small>Не сохранять temporary-чат в обычной истории</small>
+                  </span>
+                </label>
+              </fieldset>
+              <p class="privacy-note">
+                <svg><use href="#icon-lock"/></svg>
+                Локальная история OpenClaude не затрагивается. Temporary применяется только к удалённому чату claude.ai.
+              </p>
+            </section>
+
+            <section class="panel settings-section settings-section--persona">
+              <header class="panel-header">
+                <div>
+                  <h2>Режим общения</h2>
+                  <p>Выберите основу и независимо включите нужные модификаторы. Они не отменяют правила провайдера.</p>
+                </div>
+              </header>
+              <fieldset class="persona-grid" id="persona-options">
+                <legend class="sr-only">Основной режим общения</legend>
+                <label class="persona-card">
+                  <input type="radio" name="persona" value="default" data-behavior-key="persona">
+                  <span><strong>Обычный</strong><small>Без дополнительной роли</small></span>
+                </label>
+                <label class="persona-card">
+                  <input type="radio" name="persona" value="programmer" data-behavior-key="persona">
+                  <span><strong>Программист</strong><small>IDE, код и проверка результата</small></span>
+                </label>
+                <label class="persona-card">
+                  <input type="radio" name="persona" value="custom" data-behavior-key="persona">
+                  <span><strong>Своя инструкция</strong><small>Задать поведение вручную</small></span>
+                </label>
+              </fieldset>
+              <div class="behavior-modifier-heading">
+                <strong>Модификаторы</strong>
+                <span>Можно включать вместе с любой основой, в том числе со своей карточкой.</span>
+              </div>
+              <fieldset class="choice-grid behavior-modifier-grid">
+                <legend class="sr-only">Дополнительные режимы общения</legend>
+                <label class="choice-card">
+                  <input id="behavior-actor" type="checkbox" data-behavior-key="actor">
+                  <span><strong>Актёр</strong><small>Устойчивее держать выбранный образ и сцену</small></span>
+                </label>
+                <label class="choice-card">
+                  <input id="behavior-mature" type="checkbox" data-behavior-key="mature">
+                  <span><strong>Взрослый тон</strong><small>Прямой зрелый стиль; сам по себе не добавляет тему</small></span>
+                </label>
+              </fieldset>
+              <div class="custom-persona" id="custom-persona-wrap" hidden>
+                <label for="custom-persona">Своя инструкция</label>
+                <textarea id="custom-persona" rows="5" maxlength="8000" placeholder="Например: «В художественной сцене — девушка собеседника, 23 года, любит колу…»"></textarea>
+                <p class="field-hint">
+                  Для устойчивого образа описывайте персонажа и отношения как художественную сцену.
+                  Формулировки «реальный человек», «не ИИ» и «не упоминай ИИ» часто вызывают отказ
+                  Claude, поэтому OpenClaude превращает их в свойства вымышленного персонажа.
+                  Если нужны отношения, напишите прямо: «В этой сцене она — девушка собеседника».
+                  Явные 18+ детали в постоянной карточке могут блокировать даже нейтральные реплики.
+                </p>
+                <details class="persona-compilation" id="persona-compilation" hidden>
+                  <summary>Что будет отправлено Claude</summary>
+                  <p id="persona-compilation-status"></p>
+                  <pre id="persona-effective-preview"></pre>
+                  <ul id="persona-compilation-changes" hidden></ul>
+                </details>
+                <div class="textarea-footer">
+                  <span id="custom-persona-count">0 / 8000</span>
+                  <button class="button button--outline" type="button" data-action="save-custom-persona">Сохранить инструкцию</button>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page" data-page="activity" aria-labelledby="activity-title">
+          <header class="page-header">
+            <div>
+              <h1 id="activity-title">Активность</h1>
+              <p class="page-subtitle">Метрики, локальная история запросов и журнал работы шлюза.</p>
+            </div>
+            <div class="page-actions">
+              <button class="button button--outline" type="button" data-action="refresh-activity">
+                <svg><use href="#icon-refresh"/></svg>Обновить
+              </button>
+              <button class="button button--danger" type="button" data-action="clear-telemetry">
+                Очистить данные
+              </button>
+            </div>
+          </header>
+
+          <section class="panel activity-policy" aria-labelledby="activity-policy-title">
+            <div>
+              <h2 id="activity-policy-title">Локальное хранение</h2>
+              <p id="activity-policy-note">
+                Метаданные и точные usage сохраняются локально. Тексты запросов и ответов можно включить отдельно.
+              </p>
+            </div>
+            <label class="activity-policy-control">
+              <span>
+                <strong>Тексты диалогов</strong>
+                <small>Без system/developer-инструкций и результатов инструментов</small>
+              </span>
+              <span class="switch">
+                <input id="activity-store-content" type="checkbox">
+                <span aria-hidden="true"></span>
+                <span class="sr-only">Сохранять тексты диалогов</span>
+              </span>
+            </label>
+            <label class="activity-retention">
+              <span>Хранить</span>
+              <select class="select select--compact" id="activity-retention">
+                <option value="7">7 дней</option>
+                <option value="30">30 дней</option>
+                <option value="90">90 дней</option>
+                <option value="365">1 год</option>
+              </select>
+            </label>
+          </section>
+
+          <div class="activity-tabs" role="tablist" aria-label="Разделы активности">
+            <button class="activity-tab is-active" id="activity-tab-metrics" type="button" role="tab" aria-selected="true" aria-controls="activity-panel-metrics" data-action="set-activity-tab" data-tab="metrics">Метрики</button>
+            <button class="activity-tab" id="activity-tab-history" type="button" role="tab" aria-selected="false" aria-controls="activity-panel-history" data-action="set-activity-tab" data-tab="history">История</button>
+            <button class="activity-tab" id="activity-tab-logs" type="button" role="tab" aria-selected="false" aria-controls="activity-panel-logs" data-action="set-activity-tab" data-tab="logs">Логи</button>
+          </div>
+
+          <section class="panel activity-filters" aria-label="Фильтры активности">
+            <label>
+              <span>Период</span>
+              <select class="select select--compact" id="activity-period">
+                <option value="1h">1 час</option>
+                <option value="24h">24 часа</option>
+                <option value="7d" selected>7 дней</option>
+                <option value="30d">30 дней</option>
+                <option value="all">Всё время</option>
+              </select>
+            </label>
+            <label data-activity-filter="provider">
+              <span>Провайдер</span>
+              <select class="select select--compact" id="activity-provider-filter">
+                <option value="">Все провайдеры</option>
+              </select>
+            </label>
+            <label data-activity-filter="profile">
+              <span>Профиль</span>
+              <select class="select select--compact" id="activity-profile-filter">
+                <option value="">Все профили</option>
+              </select>
+            </label>
+            <label data-activity-filter="model">
+              <span>Модель</span>
+              <select class="select select--compact" id="activity-model-filter">
+                <option value="">Все модели</option>
+              </select>
+            </label>
+            <label data-activity-filter="status" hidden>
+              <span>Статус</span>
+              <select class="select select--compact" id="activity-status-filter">
+                <option value="all">Все статусы</option>
+                <option value="completed">Завершён</option>
+                <option value="error">Ошибка</option>
+                <option value="cancelled">Отменён</option>
+                <option value="interrupted">Прерван</option>
+                <option value="running">Выполняется</option>
+              </select>
+            </label>
+            <label data-activity-filter="level" hidden>
+              <span>Уровень</span>
+              <select class="select select--compact" id="activity-level-filter">
+                <option value="all">Все уровни</option>
+                <option value="error">Ошибки</option>
+                <option value="warn">Предупреждения</option>
+                <option value="info">Информация</option>
+              </select>
+            </label>
+            <label class="activity-search" data-activity-filter="search">
+              <span>Поиск</span>
+              <input id="activity-search" type="search" maxlength="200" placeholder="Модель, текст или ошибка">
+            </label>
+          </section>
+
+          <div class="activity-loading" id="activity-loading" hidden>
+            <span class="spinner"></span>Загружаем локальную телеметрию…
+          </div>
+          <div class="activity-error" id="activity-error" role="alert" hidden></div>
+
+          <section class="activity-panel is-active" id="activity-panel-metrics" data-activity-panel="metrics" role="tabpanel" aria-labelledby="activity-tab-metrics">
+            <div class="metric-grid">
+              <article class="metric-card">
+                <span>Запросы</span>
+                <strong id="metric-requests">—</strong>
+                <small id="metric-conversations">—</small>
+              </article>
+              <article class="metric-card">
+                <span>Успешность</span>
+                <strong id="metric-success">—</strong>
+                <small id="metric-errors">—</small>
+              </article>
+              <article class="metric-card metric-card--tokens">
+                <span>Точные токены</span>
+                <strong id="metric-tokens">—</strong>
+                <small id="metric-token-coverage">—</small>
+              </article>
+              <article class="metric-card">
+                <span>Время ответа</span>
+                <strong id="metric-latency">—</strong>
+                <small id="metric-p95">—</small>
+              </article>
+            </div>
+
+            <div class="activity-metrics-layout">
+              <section class="panel trend-panel">
+                <header class="panel-header">
+                  <div>
+                    <h2>Запросы во времени</h2>
+                    <p>Ошибки выделены красным; пустые интервалы не дорисовываются.</p>
+                  </div>
+                </header>
+                <div class="trend-chart" id="activity-series"></div>
+                <div class="table-empty" id="activity-series-empty">Данных за выбранный период пока нет</div>
+              </section>
+
+              <section class="panel model-metrics-panel">
+                <header class="panel-header">
+                  <div>
+                    <h2>По моделям</h2>
+                    <p>Токены суммируются только для запросов с upstream usage.</p>
+                  </div>
+                </header>
+                <div class="event-table-wrap">
+                  <table class="data-table">
+                    <thead>
+                      <tr><th>Провайдер / модель</th><th>Запросы</th><th>Токены</th></tr>
+                    </thead>
+                    <tbody id="activity-model-metrics"></tbody>
+                  </table>
+                  <div class="table-empty" id="activity-model-metrics-empty">Нет данных по моделям</div>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section class="activity-panel" id="activity-panel-history" data-activity-panel="history" role="tabpanel" aria-labelledby="activity-tab-history" hidden>
+            <section class="panel history-panel">
+              <header class="panel-header">
+                <div>
+                  <h2>История запросов</h2>
+                  <p>Один ряд — один вызов API; связанные вызовы отмечены одинаковым хэшем сессии.</p>
+                </div>
+                <span class="history-count" id="history-count"></span>
+              </header>
+              <div class="event-table-wrap">
+                <table class="data-table history-table">
+                    <thead>
+                      <tr><th>Время</th><th>Запрос</th><th>Провайдер</th><th>Модель</th><th>Статус</th><th>Токены</th><th>Время</th></tr>
+                    </thead>
+                  <tbody id="history-table-body"></tbody>
+                </table>
+                <div class="table-empty" id="history-empty">История пока пуста</div>
+              </div>
+              <div class="history-load-more" id="history-load-more" hidden>
+                <button class="button button--outline" type="button" data-action="load-more-history">Показать ещё</button>
+              </div>
+            </section>
+          </section>
+
+          <section class="activity-panel" id="activity-panel-logs" data-activity-panel="logs" role="tabpanel" aria-labelledby="activity-tab-logs" hidden>
+            <section class="diagnostic-summary" id="diagnostic-system-grid"></section>
+
+            <section class="panel event-panel">
+              <header class="panel-header panel-header--actions">
+                <div>
+                  <h2>Журнал событий</h2>
+                  <p>Санитизированные события backend, сохраняемые между перезапусками.</p>
+                </div>
+                <div class="panel-header__actions">
+                  <span class="history-count" id="logs-count"></span>
+                  <button class="button button--quiet" type="button" data-action="clear-events">
+                    Очистить журнал
+                  </button>
+                </div>
+              </header>
+              <div class="event-table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr><th>Время</th><th>Уровень</th><th>Компонент</th><th>Сообщение</th></tr>
+                  </thead>
+                  <tbody id="diagnostic-events"></tbody>
+                </table>
+                <div class="table-empty" id="diagnostic-events-empty">Событий пока нет</div>
+              </div>
+              <div class="history-load-more" id="logs-load-more" hidden>
+                <button class="button button--outline" type="button" data-action="load-more-logs">Показать ещё</button>
+              </div>
+            </section>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+    <aside class="profile-drawer" id="profile-drawer" aria-labelledby="drawer-title" aria-hidden="true">
+      <header class="drawer-header">
+        <h2 id="drawer-title">Добавить профиль</h2>
+        <button class="icon-button" type="button" data-action="close-profile-drawer" aria-label="Закрыть">
+          <svg><use href="#icon-close"/></svg>
+        </button>
+      </header>
+
+      <form id="profile-form" class="profile-form">
+        <label for="profile-provider">Провайдер</label>
+        <select id="profile-provider" name="provider" required>
+          <option value="claude_web">Claude Web</option>
+          <option value="grok_web">Grok Web · экспериментально</option>
+        </select>
+        <label for="profile-name">Название</label>
+        <input id="profile-name" name="name" type="text" maxlength="80" placeholder="Например, Резервный" required>
+        <p class="field-hint" id="profile-browser-hint">Для аккаунта будет создан отдельный локальный профиль Camoufox.</p>
+        <button class="button button--primary button--wide" type="submit">
+          <svg><use href="#icon-external"/></svg>
+          <span id="profile-submit-label">Создать и открыть Claude для входа</span>
+        </button>
+      </form>
+
+      <section class="login-progress" id="login-progress" hidden>
+        <div class="drawer-divider"></div>
+        <h3 id="login-progress-title">Проверяем авторизацию…</h3>
+        <ol class="progress-steps">
+          <li id="login-step-browser">
+            <span class="step-marker">1</span>
+            <div><strong>Браузер запущен</strong><small>Ожидаем запуск</small></div>
+          </li>
+          <li id="login-step-auth">
+            <span class="step-marker">2</span>
+            <div><strong id="login-provider-label">Вход в claude.ai</strong><small>Войдите в аккаунт в открытом окне</small></div>
+          </li>
+          <li id="login-step-models">
+            <span class="step-marker">3</span>
+            <div><strong id="login-models-label">Доступные модели</strong><small>Проверим после входа</small></div>
+          </li>
+        </ol>
+        <p class="login-error" id="login-error" role="alert" hidden></p>
+        <div class="drawer-actions drawer-actions--login">
+          <button class="button button--outline" type="button" data-action="check-login">
+            <svg><use href="#icon-refresh"/></svg>Проверить снова
+          </button>
+          <button class="button button--quiet" type="button" data-action="close-profile-drawer">Закрыть</button>
+          <button class="button button--danger" type="button" data-action="cancel-login">
+            <svg><use href="#icon-close"/></svg>Отменить и закрыть браузер
+          </button>
+        </div>
+      </section>
+
+      <p class="security-note">
+        <svg><use href="#icon-lock"/></svg>
+        Пароли и cookies не покидают локальный профиль.
+      </p>
+    </aside>
+
+    <dialog class="history-dialog" id="history-dialog" aria-labelledby="history-dialog-title">
+      <header class="drawer-header">
+        <div>
+          <h2 id="history-dialog-title">Запрос</h2>
+          <p id="history-dialog-subtitle"></p>
+        </div>
+        <button class="icon-button" type="button" data-action="close-history-detail" aria-label="Закрыть">
+          <svg><use href="#icon-close"/></svg>
+        </button>
+      </header>
+      <div class="history-detail-meta" id="history-detail-meta"></div>
+      <section class="history-message">
+        <h3>Пользователь</h3>
+        <pre id="history-user-text"></pre>
+      </section>
+      <section class="history-message">
+        <h3>Claude</h3>
+        <pre id="history-assistant-text"></pre>
+      </section>
+      <section class="history-message history-message--error" id="history-error-section" hidden>
+        <h3>Ошибка</h3>
+        <pre id="history-error-text"></pre>
+      </section>
+      <p class="history-detail-note">
+        System/developer-инструкции, tool arguments/results, cookies и идентификаторы аккаунта сюда не записываются.
+      </p>
+    </dialog>
+
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="/control/assets/app.js" defer></script>
+  </body>
+</html>

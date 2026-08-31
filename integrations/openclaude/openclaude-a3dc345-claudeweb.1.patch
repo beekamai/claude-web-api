@@ -1,0 +1,615 @@
+diff --git a/src/components/Spinner/SpinnerAnimationRow.test.tsx b/src/components/Spinner/SpinnerAnimationRow.test.tsx
+index ad28e25789a999e732595166439a74ee643d71e6..dfc75ec499f8659da75a88fdbd2300f0f612199a 100644
+--- a/src/components/Spinner/SpinnerAnimationRow.test.tsx
++++ b/src/components/Spinner/SpinnerAnimationRow.test.tsx
+@@ -1,11 +1,25 @@
+ import { describe, expect, it } from 'bun:test'
+ import { createRef } from 'react'
+ import { renderToString } from '../../utils/staticRender.js'
+-import { getCurrentResponseTokenCount, SpinnerAnimationRow } from './SpinnerAnimationRow.js'
++import {
++  getCurrentResponseTokenCount,
++  getLiveActivityLabel,
++  SpinnerAnimationRow,
++} from './SpinnerAnimationRow.js'
+ 
+ describe('SpinnerAnimationRow', () => {
+   it('uses the current response length without smoothing', () => {
+     expect(getCurrentResponseTokenCount(4_000)).toBe(1_000)
++    expect(getCurrentResponseTokenCount(1)).toBe(1)
++  })
++
++  it('describes whether the request is waiting, writing, thinking, or using a tool', () => {
++    expect(getLiveActivityLabel('requesting', 0, false)).toBe('sending')
++    expect(getLiveActivityLabel('responding', 0, false)).toBe('waiting')
++    expect(getLiveActivityLabel('responding', 16, false)).toBe('writing')
++    expect(getLiveActivityLabel('thinking', 16, false)).toBeNull()
++    expect(getLiveActivityLabel('tool-input', 16, false)).toBe('preparing tool')
++    expect(getLiveActivityLabel('responding', 16, true)).toBe('using tool')
+   })
+ 
+   it('shows the current token count immediately when streaming begins', async () => {
+@@ -34,10 +48,11 @@ describe('SpinnerAnimationRow', () => {
+       120,
+     )
+ 
+-    expect(output).toContain('1.0k tokens')
++    expect(output).toContain('writing')
++    expect(output).toContain('~1.0k tokens')
+   })
+ 
+-  it('shows zero tokens as soon as the first response character arrives', async () => {
++  it('shows an estimated token as soon as the first response character arrives', async () => {
+     const now = Date.now()
+     const output = await renderToString(
+       <SpinnerAnimationRow
+@@ -63,7 +78,8 @@ describe('SpinnerAnimationRow', () => {
+       120,
+     )
+ 
+-    expect(output).toContain('0 tokens')
++    expect(output).toContain('writing')
++    expect(output).toContain('~1 tokens')
+   })
+ 
+   it('does not overflow a narrow row when a spinner suffix is present', async () => {
+diff --git a/src/components/Spinner/SpinnerAnimationRow.tsx b/src/components/Spinner/SpinnerAnimationRow.tsx
+index 18196ee517363aa636b5f4337f242c86861f0e12..68a2b6c8734857654e7de6e36b8e551f523670c4 100644
+--- a/src/components/Spinner/SpinnerAnimationRow.tsx
++++ b/src/components/Spinner/SpinnerAnimationRow.tsx
+@@ -38,7 +38,23 @@ const THINKING_DELAY_MS = 3000;
+ const THINKING_GLOW_PERIOD_S = 2;
+ 
+ export function getCurrentResponseTokenCount(responseLength: number): number {
+-  return Math.round(responseLength / 4);
++  return Math.ceil(responseLength / 4);
++}
++
++export function getLiveActivityLabel(
++  mode: SpinnerMode,
++  responseLength: number,
++  hasActiveTools: boolean,
++): string | null {
++  if (hasActiveTools || mode === 'tool-use') return 'using tool'
++  if (mode === 'tool-input') return 'preparing tool'
++  if (mode === 'requesting') return 'sending'
++  // Thinking has its own shimmer/duration display below.
++  if (mode === 'thinking') return null
++  if (mode === 'responding') {
++    return responseLength > 0 ? 'writing' : 'waiting'
++  }
++  return responseLength > 0 ? 'writing' : 'working'
+ }
+ 
+ export type SpinnerAnimationRowProps = {
+@@ -160,12 +176,15 @@ export function SpinnerAnimationRow({
+   const totalTokens = foregroundedTeammate && !foregroundedTeammate.isIdle ? foregroundedTeammate.progress?.tokenCount ?? 0 : leaderTokens + teammateTokens;
+   const hasTokenContent = foregroundedTeammate && !foregroundedTeammate.isIdle ? totalTokens > 0 : currentResponseLength > 0 || teammateTokens > 0;
+   const tokenCount = formatNumber(totalTokens);
+-  const tokensText = `${tokenCount} tokens`;
++  const tokenCountIsEstimated = !foregroundedTeammate && currentResponseLength > 0;
++  const tokensText = `${tokenCountIsEstimated ? '~' : ''}${tokenCount} tokens`;
+   const tokensWidth = stringWidth(tokensText);
+ 
+   // === Thinking text (may shrink to fit) ===
+   let thinkingText = thinkingStatus === 'thinking' ? `thinking${effortSuffix}` : typeof thinkingStatus === 'number' ? `thought for ${Math.max(1, Math.round(thinkingStatus / 1000))}s` : null;
+   let thinkingWidthValue = thinkingText ? stringWidth(thinkingText) : 0;
++  const activityText = getLiveActivityLabel(mode, currentResponseLength, hasActiveTools);
++  const activityWidth = activityText ? stringWidth(activityText) : 0;
+ 
+   // === Progressive width gating ===
+   // messageWidth = glimmer text + spinner glyph (width: 2).
+@@ -177,28 +196,33 @@ export function SpinnerAnimationRow({
+   // the status parts, so reserve that space in the gating math too.
+   const parensWidth = hasRunningTeammates ? 4 : 4 + 2 + SEP_WIDTH;
+   const suffixWidth = spinnerSuffix ? stringWidth(spinnerSuffix) + sep : 0;
++  const wantsActivity = activityText !== null;
+   const wantsThinking = thinkingStatus !== null;
+   const wantsTimer = verbose || hasRunningTeammates || effectiveElapsedMs > SHOW_TIMER_AFTER_MS;
+   const wantsTokens = true;
+   const availableSpace = columns - messageWidth - parensWidth;
+-  let showThinking = wantsThinking && availableSpace > suffixWidth + thinkingWidthValue;
++  const showActivity = wantsActivity && availableSpace > suffixWidth + activityWidth;
++  const usedAfterActivity = suffixWidth + (showActivity ? activityWidth + sep : 0);
++  let showThinking = wantsThinking && availableSpace > usedAfterActivity + thinkingWidthValue;
+   if (!showThinking && wantsThinking && thinkingStatus === 'thinking' && effortSuffix) {
+-    if (availableSpace > suffixWidth + THINKING_BARE_WIDTH) {
++    if (availableSpace > usedAfterActivity + THINKING_BARE_WIDTH) {
+       thinkingText = 'thinking';
+       thinkingWidthValue = THINKING_BARE_WIDTH;
+       showThinking = true;
+     }
+   }
+-  const usedAfterThinking = suffixWidth + (showThinking ? thinkingWidthValue + sep : 0);
+-  const showTimer = wantsTimer && availableSpace > usedAfterThinking + timerWidth;
+-  const usedAfterTimer = usedAfterThinking + (showTimer ? timerWidth + sep : 0);
+-  const showTokens = wantsTokens && hasTokenContent && availableSpace > usedAfterTimer + tokensWidth;
++  const usedAfterThinking = usedAfterActivity + (showThinking ? thinkingWidthValue + sep : 0);
++  // Live output count is more useful than elapsed time once text starts, so it
++  // gets the next width slot and the timer gracefully drops on narrow rows.
++  const showTokens = wantsTokens && hasTokenContent && availableSpace > usedAfterThinking + tokensWidth;
++  const usedAfterTokens = usedAfterThinking + (showTokens ? tokensWidth + sep : 0);
++  const showTimer = wantsTimer && availableSpace > usedAfterTokens + timerWidth;
+   // Second chance for narrow terminals: the gating above reserves space for
+   // the mode glyph + separator, but a would-be thinking-only spin renders
+   // neither the glyph nor the wrapping parens beyond "( )". When nothing
+   // else will show, re-try the thinking gate with that space returned so
+   // "(thinking)" appears instead of nothing.
+-  if (!showThinking && wantsThinking && thinkingStatus === 'thinking' && !hasRunningTeammates && !spinnerSuffix && !showTimer && !showTokens) {
++  if (!showThinking && wantsThinking && thinkingStatus === 'thinking' && !hasRunningTeammates && !spinnerSuffix && !showActivity && !showTimer && !showTokens) {
+     const bareAvailable = columns - messageWidth - 2;
+     if (bareAvailable > thinkingWidthValue) {
+       showThinking = true;
+@@ -208,7 +232,7 @@ export function SpinnerAnimationRow({
+       showThinking = true;
+     }
+   }
+-  const thinkingOnly = showThinking && thinkingStatus === 'thinking' && !spinnerSuffix && !showTimer && !showTokens && true;
++  const thinkingOnly = showThinking && thinkingStatus === 'thinking' && !spinnerSuffix && !showActivity && !showTimer && !showTokens && true;
+ 
+   // === Thinking shimmer color (formerly ThinkingShimmerText's own timer) ===
+   // Same sine-wave opacity, but derived from our shared `time` instead of a
+@@ -220,15 +244,17 @@ export function SpinnerAnimationRow({
+   // === Build status parts ===
+   const parts = [...(spinnerSuffix ? [<Text dimColor key="suffix">
+             {spinnerSuffix}
+-          </Text>] : []), ...(showTimer ? [<Text dimColor key="elapsedTime">
+-            {timerText}
+-          </Text>] : []), ...(showTokens ? [<Text dimColor key="tokens">
+-            {tokensText}
++          </Text>] : []), ...(showActivity && activityText ? [<Text dimColor key="activity">
++            {activityText}
+           </Text>] : []), ...(showThinking && thinkingText ? [thinkingStatus === 'thinking' && !reducedMotion ? <Text key="thinking" color={thinkingShimmerColor}>
+               {thinkingOnly ? `(${thinkingText})` : thinkingText}
+             </Text> : <Text dimColor key="thinking">
+               {thinkingText}
+-            </Text>] : [])];
++          </Text>] : []), ...(showTimer ? [<Text dimColor key="elapsedTime">
++            {timerText}
++          </Text>] : []), ...(showTokens ? [<Text dimColor key="tokens">
++            {tokensText}
++          </Text>] : [])];
+   // Lead the status with the request-direction glyph (↑ requesting /
+   // ↓ responding) so the mode is visible whenever any status shows — it was
+   // previously buried inside the tokens part, which only appears after 30s.
+diff --git a/src/screens/REPL.tsx b/src/screens/REPL.tsx
+index c299f7cb449fb7d027aa49bb13ededfd7e83bf1b..70937d6d601ccd59aab761047875a23281098b81 100644
+--- a/src/screens/REPL.tsx
++++ b/src/screens/REPL.tsx
+@@ -201,7 +201,7 @@ const SUGGEST_BG_PR_NOOP = (_p: string, _n: string): boolean => false;
+ const useScheduledTasks = require('../hooks/useScheduledTasks.js').useScheduledTasks;
+ /* eslint-enable @typescript-eslint/no-require-imports */
+ import { isAgentSwarmsEnabled } from '../utils/agentSwarmsEnabled.js';
+-import { decideStreamingTextUpdate } from './streamingTextPublish.js';
++import { decideStreamingTextUpdate, shouldShowStreamingText, STREAMING_TEXT_FLUSH_INTERVAL_MS } from './streamingTextPublish.js';
+ import type { SandboxAskCallback, NetworkHostPattern } from '../utils/sandbox/sandbox-adapter.js';
+ import { type IDEExtensionInstallationStatus, closeOpenDiffs, getConnectedIdeClient, type IdeType } from '../utils/ide.js';
+ import { useIDEIntegration } from '../hooks/useIDEIntegration.js';
+@@ -1585,43 +1585,91 @@ export function REPL({
+     }, 200);
+   }, []);
+ 
+-  // Streaming text display. streamingTextRef holds the full accumulated text
+-  // (eager, per delta); streamingText state is only published when the visible
+-  // (newline-truncated) preview actually changes. The Ink root is a LegacyRoot,
+-  // so every setState from a stream event commits a synchronous REPL render —
+-  // and because the preview hides the in-progress trailing line, deltas between
+-  // newlines never change anything on screen. Publishing only on newline (and
+-  // on clear) drops those no-op renders entirely under fast streams
+-  // (100-300 deltas/sec) while keeping the displayed text byte-identical.
+-  // Cleared on message arrival (messages.ts) so displayedMessages switches from
+-  // deferredMessages to messages atomically.
++  // Streaming text display. streamingTextRef eagerly accumulates every delta
++  // while React state is refreshed at a bounded cadence. This keeps the
++  // in-progress trailing line visible without forcing 100-300 synchronous Ink
++  // LegacyRoot renders per second on fast providers. Windows main-screen mode
++  // retains its cursor/scrollback safety guard; alternate-screen fullscreen is
++  // safe to update because it owns a fixed viewport.
+   const [streamingText, setStreamingText] = useState<string | null>(null);
+   const streamingTextRef = useRef<string | null>(null);
+   const lastFlushedStreamingVisibleRef = useRef<string | null>(null);
+-  const showStreamingText = !reducedMotion && !hasCursorUpViewportYankBug();
++  const streamingTextFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
++  const showStreamingText = shouldShowStreamingText(
++    reducedMotion,
++    hasCursorUpViewportYankBug(),
++    isFullscreenEnvEnabled(),
++  );
++  const streamingPreviewEnabledRef = useRef(showStreamingText);
++  streamingPreviewEnabledRef.current = showStreamingText;
++
++  const flushStreamingTextPreview = useCallback(() => {
++    streamingTextFlushTimerRef.current = null;
++    const decision = decideStreamingTextUpdate(
++      streamingTextRef.current,
++      text => text,
++      streamingPreviewEnabledRef.current,
++      lastFlushedStreamingVisibleRef.current,
++    );
++    if (decision.publish) {
++      lastFlushedStreamingVisibleRef.current = decision.nextVisible;
++      setStreamingText(decision.nextText);
++    }
++  }, []);
++
++  useEffect(() => {
++    if (showStreamingText) {
++      flushStreamingTextPreview();
++      return;
++    }
++    if (streamingTextFlushTimerRef.current) {
++      clearTimeout(streamingTextFlushTimerRef.current);
++      streamingTextFlushTimerRef.current = null;
++    }
++    lastFlushedStreamingVisibleRef.current = null;
++    setStreamingText(null);
++  }, [flushStreamingTextPreview, showStreamingText]);
++
++  useEffect(() => () => {
++    if (streamingTextFlushTimerRef.current) {
++      clearTimeout(streamingTextFlushTimerRef.current);
++    }
++  }, []);
++
+   const onStreamingText = useCallback((f: (current: string | null) => string | null) => {
+-    // decideStreamingTextUpdate keeps the ref current even when the live preview
+-    // is disabled (reduced-motion / cursor-up yank bug) — the Esc handler
+-    // recovers partial assistant output from it — and publishes to state only
+-    // when the newline-truncated visible preview changes.
++    const publishImmediately = streamingTextRef.current === null;
+     const decision = decideStreamingTextUpdate(
+       streamingTextRef.current,
+       f,
+-      showStreamingText,
++      streamingPreviewEnabledRef.current,
+       lastFlushedStreamingVisibleRef.current,
++      publishImmediately,
+     );
+     streamingTextRef.current = decision.nextText;
++    if (decision.nextText === null) {
++      if (streamingTextFlushTimerRef.current) {
++        clearTimeout(streamingTextFlushTimerRef.current);
++        streamingTextFlushTimerRef.current = null;
++      }
++      lastFlushedStreamingVisibleRef.current = null;
++      setStreamingText(null);
++      return;
++    }
+     if (decision.publish) {
+       lastFlushedStreamingVisibleRef.current = decision.nextVisible;
+       setStreamingText(decision.nextText);
+     }
+-  }, [showStreamingText]);
++    if (streamingPreviewEnabledRef.current && !streamingTextFlushTimerRef.current) {
++      streamingTextFlushTimerRef.current = setTimeout(
++        flushStreamingTextPreview,
++        STREAMING_TEXT_FLUSH_INTERVAL_MS,
++      );
++    }
++  }, [flushStreamingTextPreview]);
+ 
+-  // Hide the in-progress source line so text streams line-by-line, not
+-  // char-by-char. lastIndexOf returns -1 when no newline, giving '' → null.
+-  // Guard on showStreamingText so toggling reducedMotion mid-stream
+-  // immediately hides the streaming preview.
+-  const visibleStreamingText = streamingText && showStreamingText ? streamingText.substring(0, streamingText.lastIndexOf('\n') + 1) || null : null;
++  // Guard on showStreamingText so changing terminal/reduced-motion mode hides
++  // a previously-published preview immediately.
++  const visibleStreamingText = streamingText && showStreamingText ? streamingText : null;
+   const [lastQueryCompletionTime, setLastQueryCompletionTime] = useState(0);
+   const [spinnerMessage, setSpinnerMessage] = useState<string | null>(null);
+   const [spinnerColor, setSpinnerColor] = useState<keyof Theme | null>(null);
+@@ -1743,6 +1791,10 @@ export function REPL({
+       clearTimeout(reducedMotionResponseLengthTimerRef.current);
+       reducedMotionResponseLengthTimerRef.current = null;
+     }
++    if (streamingTextFlushTimerRef.current) {
++      clearTimeout(streamingTextFlushTimerRef.current);
++      streamingTextFlushTimerRef.current = null;
++    }
+     streamingTextRef.current = null;
+     lastFlushedStreamingVisibleRef.current = null;
+     setStreamingText(null);
+@@ -1886,11 +1938,9 @@ export function REPL({
+     // (e.g., multiple background agents completing in rapid succession) because
+     // isLoading goes false momentarily between processing each one.
+     getCommandQueueLength() > 0) &&
+-    // Hide spinner when waiting for leader to approve permission request
+-    !pendingWorkerRequest && !onlySleepToolActive && (
+-      // Hide spinner when streaming text is visible (the text IS the feedback),
+-      // but keep it when isBriefOnly suppresses the streaming text display
+-      !visibleStreamingText || isBriefOnly);
++    // Keep the progress row visible alongside streamed text: it carries the
++    // live phase, elapsed time, and estimated token count.
++    !pendingWorkerRequest && !onlySleepToolActive;
+ 
+   // Check if any permission or ask question prompt is currently visible
+   // This is used to prevent the survey from opening while prompts are active
+@@ -3212,6 +3262,10 @@ export function REPL({
+         clearTimeout(reducedMotionResponseLengthTimerRef.current);
+         reducedMotionResponseLengthTimerRef.current = null;
+       }
++      if (streamingTextFlushTimerRef.current) {
++        clearTimeout(streamingTextFlushTimerRef.current);
++        streamingTextFlushTimerRef.current = null;
++      }
+       if (feature('TOKEN_BUDGET')) {
+         const parsedBudget = input ? parseTokenBudget(input) : null;
+         snapshotOutputTokensForTurn(parsedBudget ?? getCurrentTurnTokenBudget());
+diff --git a/src/screens/replStreamingTextClear.test.ts b/src/screens/replStreamingTextClear.test.ts
+index 61e20f3bbfb773ac8aceae9ae6777fb855285b85..bfe38edbc0d6b4eaca2525959abf9a3607127590 100644
+--- a/src/screens/replStreamingTextClear.test.ts
++++ b/src/screens/replStreamingTextClear.test.ts
+@@ -4,20 +4,18 @@ import { join } from 'node:path'
+ 
+ // Source-scan regression (same approach as REPL.queryLifecycle.test.ts) for the
+ // turn-boundary clearing of the streaming-text refs. The streaming optimization
+-// keeps the full accumulated text in streamingTextRef and the last published
+-// preview in lastFlushedStreamingVisibleRef. If a reset / next-turn path nulls
+-// one but not the other, cancelling a later turn before any new delta arrives
+-// could re-append the previous answer's text (Esc reads streamingTextRef) or
+-// fail to re-publish (lastFlushedStreamingVisibleRef stays non-null). A unit
+-// test of the extracted helper cannot catch that wiring regression, so assert
+-// the clears directly against the component source.
++// keeps full accumulated text, last-published preview, and a pending coalesced
++// render timer. A reset / next-turn path must clear all three before publishing
++// null, otherwise a late timer can repaint the previous answer into a new turn.
++// A unit test of the extracted helper cannot catch that component wiring
++// regression, so assert the clears directly against the source.
+ const source = readFileSync(join(import.meta.dirname, 'REPL.tsx'), 'utf8')
+ 
+ describe('REPL streaming-text clear wiring', () => {
+-  test('every streamingTextRef clear also clears the preview ref and publishes null', () => {
++  test('every turn-boundary clear cancels the timer, clears refs, and publishes null', () => {
+     // The full reset that each turn-boundary path must perform, in order.
+     const fullClear =
+-      /streamingTextRef\.current = null;\s*lastFlushedStreamingVisibleRef\.current = null;\s*setStreamingText\(null\);/g
++      /if \(streamingTextFlushTimerRef\.current\) \{\s*clearTimeout\(streamingTextFlushTimerRef\.current\);\s*streamingTextFlushTimerRef\.current = null;\s*\}[\s\S]{0,700}?streamingTextRef\.current = null;\s*lastFlushedStreamingVisibleRef\.current = null;\s*setStreamingText\(null\);/g
+     const fullClears = source.match(fullClear) ?? []
+ 
+     // Both the cancel/reset path and the next-turn start must perform it.
+diff --git a/src/screens/streamingTextPublish.test.ts b/src/screens/streamingTextPublish.test.ts
+index 2c4e7cca22dcaaf762d4a27f0e1e4b4c33e1c4aa..26c4fbf806a55dfff6823bc04b8bf30bd1ffbac2 100644
+--- a/src/screens/streamingTextPublish.test.ts
++++ b/src/screens/streamingTextPublish.test.ts
+@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
+ 
+ import {
+   decideStreamingTextUpdate,
++  shouldShowStreamingText,
+   visibleStreamingPreview,
+ } from './streamingTextPublish.js'
+ 
+@@ -30,14 +31,26 @@ function runDeltas(
+ }
+ 
+ describe('visibleStreamingPreview', () => {
+-  test('hides the in-progress trailing line (only newline-terminated text shows)', () => {
++  test('shows the in-progress trailing line before a newline arrives', () => {
+     expect(visibleStreamingPreview(null)).toBeNull()
+-    expect(visibleStreamingPreview('partial line')).toBeNull()
+-    expect(visibleStreamingPreview('line1\npart')).toBe('line1\n')
++    expect(visibleStreamingPreview('partial line')).toBe('partial line')
++    expect(visibleStreamingPreview('line1\npart')).toBe('line1\npart')
+     expect(visibleStreamingPreview('a\nb\nc\n')).toBe('a\nb\nc\n')
+   })
+ })
+ 
++describe('shouldShowStreamingText', () => {
++  test('allows the Windows cursor-bug terminal inside a fixed fullscreen viewport', () => {
++    expect(shouldShowStreamingText(false, true, true)).toBe(true)
++    expect(shouldShowStreamingText(false, true, false)).toBe(false)
++  })
++
++  test('keeps reduced-motion preview disabled in every terminal mode', () => {
++    expect(shouldShowStreamingText(true, false, false)).toBe(false)
++    expect(shouldShowStreamingText(true, true, true)).toBe(false)
++  })
++})
++
+ describe('decideStreamingTextUpdate', () => {
+   test('preview disabled: deltas still accumulate in the ref but never publish', () => {
+     const { ref, published } = runDeltas(
+@@ -50,20 +63,59 @@ describe('decideStreamingTextUpdate', () => {
+     expect(published).toEqual([])
+   })
+ 
+-  test('preview enabled: only newline-completing deltas publish', () => {
++  test('preview enabled: partial lines publish when the render slot is available', () => {
+     const { ref, published } = runDeltas(
+       [
+-        append('Hel'), // no newline -> no publish
+-        append('lo'), // no newline -> no publish
+-        append(' world\n'), // newline -> publish
+-        append('next part'), // no newline -> no publish
+-        append(' done\n'), // newline -> publish
++        append('Hel'),
++        append('lo'),
++        append(' world\n'),
++        append('next part'),
++        append(' done\n'),
+       ],
+       /* showPreview */ true,
+     )
+     expect(ref).toBe('Hello world\nnext part done\n')
+-    // Two publishes, each the full accumulated text at the newline boundary.
+-    expect(published).toEqual(['Hello world\n', 'Hello world\nnext part done\n'])
++    expect(published).toEqual([
++      'Hel',
++      'Hello',
++      'Hello world\n',
++      'Hello world\nnext part',
++      'Hello world\nnext part done\n',
++    ])
++  })
++
++  test('a busy render slot coalesces deltas without losing accumulated text', () => {
++    const first = decideStreamingTextUpdate(
++      null,
++      append('Hel'),
++      /* showPreview */ true,
++      null,
++    )
++    const coalesced = decideStreamingTextUpdate(
++      first.nextText,
++      append('lo'),
++      /* showPreview */ true,
++      first.nextVisible,
++      /* publishNow */ false,
++    )
++    const flush = decideStreamingTextUpdate(
++      coalesced.nextText,
++      text => text,
++      /* showPreview */ true,
++      first.nextVisible,
++    )
++
++    expect(first.publish).toBe(true)
++    expect(coalesced).toEqual({
++      nextText: 'Hello',
++      publish: false,
++      nextVisible: 'Hel',
++    })
++    expect(flush).toEqual({
++      nextText: 'Hello',
++      publish: true,
++      nextVisible: 'Hello',
++    })
+   })
+ 
+   test('the ref holds the full accumulated text the Esc handler would restore', () => {
+@@ -89,14 +141,14 @@ describe('decideStreamingTextUpdate', () => {
+     expect(clear.nextVisible).toBeNull()
+   })
+ 
+-  test('preview enabled but visible unchanged does not publish (idempotent ref write)', () => {
++  test('preview enabled but text unchanged does not publish (idempotent ref write)', () => {
+     const d = decideStreamingTextUpdate(
+       'done\n',
+-      append('more'),
++      text => text,
+       /* showPreview */ true,
+       'done\n',
+     )
+-    expect(d.nextText).toBe('done\nmore')
+-    expect(d.publish).toBe(false) // visible preview still "done\n"
++    expect(d.nextText).toBe('done\n')
++    expect(d.publish).toBe(false)
+   })
+ })
+diff --git a/src/screens/streamingTextPublish.ts b/src/screens/streamingTextPublish.ts
+index 1354a9df0377d14e884c2ee34f632b25ba1244d7..cb0905cdf62527f87e639190d2f20d79bcb324ab 100644
+--- a/src/screens/streamingTextPublish.ts
++++ b/src/screens/streamingTextPublish.ts
+@@ -1,14 +1,24 @@
+ // Pure streaming-text publish decision, factored out of REPL's onStreamingText
+-// so the hot-path behavior can be unit-tested without rendering the REPL:
+-// deltas always accumulate (so the Esc handler can recover partial output even
+-// when the live preview is off), but a React state publish — which commits a
+-// synchronous LegacyRoot render — only happens when the newline-truncated
+-// visible preview actually changes.
++// so the hot-path behavior can be unit-tested without rendering the REPL.
++// Deltas always accumulate (so the Esc handler can recover partial output even
++// when the live preview is off). REPL decides whether the current call may
++// publish immediately or should be coalesced by its short render timer.
+ 
+-// The streaming preview hides the in-progress trailing line (everything after
+-// the last newline), so it only changes when a newline is appended.
++export const STREAMING_TEXT_FLUSH_INTERVAL_MS = 50
++
++export function shouldShowStreamingText(
++  reducedMotion: boolean,
++  hasCursorUpBug: boolean,
++  fullscreen: boolean,
++): boolean {
++  return !reducedMotion && (fullscreen || !hasCursorUpBug)
++}
++
++// A partial trailing line is useful feedback: it proves the provider is
++// writing instead of leaving the user staring at a spinner until a newline or
++// the end of the response.
+ export function visibleStreamingPreview(text: string | null): string | null {
+-  return text ? text.substring(0, text.lastIndexOf('\n') + 1) || null : null
++  return text || null
+ }
+ 
+ export type StreamingTextDecision = {
+@@ -28,10 +38,13 @@ export function decideStreamingTextUpdate(
+   apply: (current: string | null) => string | null,
+   showPreview: boolean,
+   lastVisible: string | null,
++  publishNow = true,
+ ): StreamingTextDecision {
+   const nextText = apply(currentText)
+-  if (!showPreview) {
+-    // Accumulate into the ref but never render while the preview is hidden.
++  if (!showPreview || (!publishNow && nextText !== null)) {
++    // Accumulate into the ref but do not render while the preview is hidden or
++    // while a coalescing timer owns the next screen refresh. Clears bypass the
++    // timer so streaming text swaps atomically to the final assistant message.
+     return { nextText, publish: false, nextVisible: lastVisible }
+   }
+   const nextVisible = visibleStreamingPreview(nextText)
+diff --git a/src/services/api/client.test.ts b/src/services/api/client.test.ts
+index f1297e0e91a9db4160f27786cd0d574ce8e1b659..8dab42bb98e2f46315f02ce88f356a502950c1ad 100644
+--- a/src/services/api/client.test.ts
++++ b/src/services/api/client.test.ts
+@@ -5,6 +5,8 @@ import {
+   ensureIntegrationsLoaded,
+   registerGateway,
+ } from '../../integrations/index.js'
++import { getSessionId } from '../../bootstrap/state.js'
++import { getCwd } from '../../utils/cwd.js'
+ import { publicBuildVersion } from '../../utils/version.js'
+ 
+ // bun:test keeps mock.module() registrations process-global across test files.
+@@ -1525,6 +1527,8 @@ test('strips Anthropic-specific custom headers before sending OpenAI-compatible
+   expect(capturedHeaders?.get('x-app')).toBeNull()
+   expect(capturedHeaders?.get('api-key')).toBeNull()
+   expect(capturedHeaders?.get('x-safe-header')).toBe('keep-me')
++  expect(capturedHeaders?.get('x-openclaude-session-id')).toBe(getSessionId())
++  expect(capturedHeaders?.get('x-openclaude-working-directory')).toBe(getCwd())
+   expect(capturedHeaders?.get('authorization')).toBe('Bearer openai-test-key')
+ })
+ 
+diff --git a/src/services/api/client.ts b/src/services/api/client.ts
+index b7b1bfa12198d5f8d9a93d7db9b8db9d075ce869..29f49c4546974716c531a63bdb0971f3de04010e 100644
+--- a/src/services/api/client.ts
++++ b/src/services/api/client.ts
+@@ -31,6 +31,7 @@ import {
+   getIsNonInteractiveSession,
+   getSessionId,
+ } from '../../bootstrap/state.js'
++import { getCwd } from '../../utils/cwd.js'
+ import { getOauthConfig } from '../../constants/oauth.js'
+ import { isDebugToStdErr, logForDebugging } from '../../utils/debug.js'
+ import {
+@@ -472,6 +473,8 @@ export async function getAnthropicClient({
+     'x-app': 'cli',
+     'User-Agent': getUserAgent(),
+     'X-Claude-Code-Session-Id': getSessionId(),
++    'X-OpenClaude-Session-Id': getSessionId(),
++    'X-OpenClaude-Working-Directory': getCwd(),
+     ...customHeaders,
+     ...(containerId ? { 'x-claude-remote-container-id': containerId } : {}),
+     ...(remoteSessionId
+diff --git a/src/services/api/openaiShim/providerCompatibility.test.ts b/src/services/api/openaiShim/providerCompatibility.test.ts
+index 97d10723e30a4a0c648581927df672cf1c3e4eb2..da8b915a8baedb81f1eeb90617176f02fb17344d 100644
+--- a/src/services/api/openaiShim/providerCompatibility.test.ts
++++ b/src/services/api/openaiShim/providerCompatibility.test.ts
+@@ -172,8 +172,14 @@ test('filters Anthropic and authentication headers while preserving compatible h
+     'x-client-app': 'secret',
+     authorization: 'Bearer secret',
+     'x-api-key': 'secret',
++    'X-OpenClaude-Session-Id': 'session-123',
++    'X-OpenClaude-Working-Directory': 'D:\\repo',
+     'x-custom': 'keep',
+-  })).toEqual({ 'x-custom': 'keep' })
++  })).toEqual({
++    'X-OpenClaude-Session-Id': 'session-123',
++    'X-OpenClaude-Working-Directory': 'D:\\repo',
++    'x-custom': 'keep',
++  })
+ })
+ 
+ test('the façade applies provider header filtering to a real request', async () => {

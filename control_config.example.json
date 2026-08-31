@@ -1,0 +1,43 @@
+{
+  "version": 3,
+  "fingerprint_salt": "generated-on-first-run",
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "name": "Основной",
+      "path": "<absolute path to the browser profile directory>",
+      "provider": "claude_web",
+      "project_id": null,
+      "organization_id": null,
+      "model": "auto",
+      "models": [],
+      "account": {
+        "authenticated": false,
+        "name": null,
+        "email": null,
+        "uuid_suffix": null
+      },
+      "status": "new",
+      "enabled": true,
+      "account_fingerprint": null,
+      "limited_until": null,
+      "last_checked_at": null,
+      "created_at": 0
+    }
+  ],
+  "behavior": {
+    "streaming": true,
+    "thinking": "auto",
+    "privacy": "ephemeral",
+    "persona": "default",
+    "custom_persona": "",
+    "actor": false,
+    "mature": false
+  },
+  "telemetry": {
+    "store_content": true,
+    "retention_days": 30,
+    "max_requests": 5000
+  }
+}
