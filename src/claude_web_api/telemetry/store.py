@@ -12,9 +12,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from claude_web_api.paths import TELEMETRY_DB_FILE as DEFAULT_DB_PATH
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_DB_PATH = PROJECT_ROOT / ".runtime" / "telemetry.sqlite3"
 MAX_USER_TEXT = 32_000
 MAX_ASSISTANT_TEXT = 96_000
 MAX_ERROR_TEXT = 1_000

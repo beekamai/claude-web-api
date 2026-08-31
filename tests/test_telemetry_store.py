@@ -7,7 +7,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-from telemetry_store import TelemetryStore, stable_session_key
+from claude_web_api.telemetry.store import TelemetryStore, stable_session_key
 
 
 class TelemetryStoreTests(unittest.TestCase):

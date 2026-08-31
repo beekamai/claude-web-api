@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import re
 import threading
@@ -13,11 +13,13 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-
-PROJECT_ROOT = Path(__file__).resolve().parent
-CONFIG_PATH = PROJECT_ROOT / "control_config.json"
-LEGACY_PROFILE_DIR = PROJECT_ROOT / "profile"
-LEGACY_PROJECT_FILE = PROJECT_ROOT / "claude_project.json"
+from claude_web_api.paths import (
+    CONTROL_CONFIG_FILE as CONFIG_PATH,
+)
+from claude_web_api.paths import (
+    LEGACY_PROFILE_DIR,
+    LEGACY_PROJECT_FILE,
+)
 
 PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 

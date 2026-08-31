@@ -1,0 +1,1 @@
+"""control-panel configuration store."""

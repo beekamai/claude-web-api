@@ -1,6 +1,6 @@
 import unittest
 
-from provider_contracts import (
+from claude_web_api.providers.contracts import (
     CompletionProvider,
     ProviderCapabilities,
     ProviderEvent,

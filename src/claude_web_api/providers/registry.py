@@ -5,8 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from provider_contracts import CompletionProvider
-
+from claude_web_api.providers.contracts import CompletionProvider
 
 PROVIDER_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 

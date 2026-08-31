@@ -6,23 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from grok_web_provider import (
-    GROK_PROTOCOL_SCHEMA,
-    GROK_PROBE_SCHEMA,
-    GROK_WEB_ORIGIN,
-    GROK_WEB_PROVIDER_ID,
-    GrokBrowserTransport,
-    GrokCapabilityUnavailableError,
-    GrokModelCatalogEntry,
-    GrokModelEntitlement,
-    GrokProtocolVerifier,
-    GrokProtocolUnverifiedError,
-    GrokProtocolViolationError,
-    GrokProviderNotReadyError,
-    GrokWebProtocolDescriptor,
-    GrokWebProvider,
-)
-from provider_contracts import (
+from claude_web_api.providers.contracts import (
     CompletionProvider,
     ProviderEvent,
     ProviderEventKind,
@@ -33,7 +17,22 @@ from provider_contracts import (
     ProviderTurn,
     ProviderTurnRequest,
 )
-
+from claude_web_api.providers.grok_web import (
+    GROK_PROBE_SCHEMA,
+    GROK_PROTOCOL_SCHEMA,
+    GROK_WEB_ORIGIN,
+    GROK_WEB_PROVIDER_ID,
+    GrokBrowserTransport,
+    GrokCapabilityUnavailableError,
+    GrokModelCatalogEntry,
+    GrokModelEntitlement,
+    GrokProtocolUnverifiedError,
+    GrokProtocolVerifier,
+    GrokProtocolViolationError,
+    GrokProviderNotReadyError,
+    GrokWebProtocolDescriptor,
+    GrokWebProvider,
+)
 
 DIGEST = "a" * 64
 SECOND_DIGEST = "b" * 64

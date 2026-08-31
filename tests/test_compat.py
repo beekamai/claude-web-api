@@ -5,15 +5,12 @@ import hashlib
 import inspect
 import json
 import os
-import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 _TEST_TELEMETRY_DIRECTORY = tempfile.TemporaryDirectory(
     prefix="openclaude-telemetry-tests-"
@@ -22,28 +19,16 @@ os.environ["OPENCLAUDE_TELEMETRY_DB"] = str(
     Path(_TEST_TELEMETRY_DIRECTORY.name) / "telemetry.sqlite3"
 )
 
-import server
-from claude_session import (
-    ClaudeAccountIdentityError,
-    ClaudeBrowserUnavailableError,
-    ClaudeCompletionRejectedError,
-    ClaudeConversationLimitError,
-    ClaudeServiceUnavailableError,
-    ClaudeSession,
-    ClaudeTurnOutcomeUnknownError,
-    ClaudeUsageLimitError,
-    MODEL_SELECTOR_TRANSIENT_REASONS,
-    NativeToolUse,
-    NativeTurn,
-)
-from control_config import (
+import claude_web_api.app as server
+from claude_web_api.control.config import (
     CONFIG_VERSION,
     SUPPORTED_PROFILE_PROVIDERS,
     ControlConfig,
     compile_custom_persona,
     compile_custom_persona_details,
 )
-from openai_compat import (
+from claude_web_api.paths import PROJECT_INSTRUCTIONS, WEB_ROOT
+from claude_web_api.protocol.openai import (
     OPENCLAUDE_CONTEXT_TOOL_NAME,
     ParsedAssistant,
     ToolCall,
@@ -59,8 +44,20 @@ from openai_compat import (
     trailing_tool_results,
     user_selected_persona_message,
 )
-from telemetry_store import TelemetryStore, stable_session_key
-
+from claude_web_api.session.claude import (
+    MODEL_SELECTOR_TRANSIENT_REASONS,
+    ClaudeAccountIdentityError,
+    ClaudeBrowserUnavailableError,
+    ClaudeCompletionRejectedError,
+    ClaudeConversationLimitError,
+    ClaudeServiceUnavailableError,
+    ClaudeSession,
+    ClaudeTurnOutcomeUnknownError,
+    ClaudeUsageLimitError,
+    NativeToolUse,
+    NativeTurn,
+)
+from claude_web_api.telemetry.store import TelemetryStore, stable_session_key
 
 SYSTEM = {
     "role": "system",
@@ -231,11 +228,7 @@ class TranslationTests(unittest.TestCase):
     def test_project_contract_marks_context_carrier_as_internal_only(
         self,
     ) -> None:
-        contract = (
-            Path(__file__)
-            .with_name("project_instructions.txt")
-            .read_text(encoding="utf-8")
-        )
+        contract = PROJECT_INSTRUCTIONS.read_text(encoding="utf-8")
         self.assertIn(OPENCLAUDE_CONTEXT_TOOL_NAME, contract)
         self.assertIn("informational metadata carrier", contract)
         self.assertIn("never call that function", contract)
@@ -1204,7 +1197,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             return await awaitable
 
         with patch(
-            "claude_session.asyncio.wait_for",
+            "claude_web_api.session.claude.asyncio.wait_for",
             AsyncMock(side_effect=immediate),
         ):
             self.assertTrue(await native_session._load_account_identity())
@@ -3299,7 +3292,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
 
     def test_saving_custom_persona_also_activates_it_in_control_ui(self) -> None:
         source = (
-            Path(__file__).with_name("web").joinpath("app.js").read_text(
+            WEB_ROOT.joinpath("app.js").read_text(
                 encoding="utf-8"
             )
         )
@@ -3311,7 +3304,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
     def test_actor_and_mature_are_independent_control_ui_modifiers(
         self,
     ) -> None:
-        web = Path(__file__).with_name("web")
+        web = WEB_ROOT
         html = web.joinpath("index.html").read_text(encoding="utf-8")
         script = web.joinpath("app.js").read_text(encoding="utf-8")
 
@@ -4364,7 +4357,7 @@ class ProtocolRoutingTests(unittest.IsolatedAsyncioTestCase):
         write_prompt = AsyncMock()
         with (
             patch(
-                "claude_session.KNOWN_OPENCLAUDE_PROJECT_PROMPT_SHA256",
+                "claude_web_api.session.claude.KNOWN_OPENCLAUDE_PROJECT_PROMPT_SHA256",
                 {previous_hash},
             ),
             patch.object(

@@ -1,17 +1,17 @@
 import unittest
 from types import SimpleNamespace
 
-from claude_web_provider import (
+from claude_web_api.providers.claude_web import (
     CLAUDE_WEB_PROVIDER_ID,
     ClaudeWebProviderAdapter,
 )
-from provider_contracts import (
+from claude_web_api.providers.contracts import (
     CompletionProvider,
     ProviderEventKind,
     ProviderToolResult,
     ProviderTurnRequest,
 )
-from provider_registry import (
+from claude_web_api.providers.registry import (
     ProfileRouteError,
     ProviderRegistry,
     ProviderRegistryError,

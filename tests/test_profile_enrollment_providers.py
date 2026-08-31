@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from profile_enrollment import (
+from claude_web_api.enrollment.manager import (
     CLAUDE_WEB_PROVIDER,
     GROK_WEB_PROVIDER,
     Enrollment,
@@ -150,7 +150,7 @@ class ProviderEnrollmentTests(unittest.IsolatedAsyncioTestCase):
         manager = ProfileEnrollmentManager()
         with tempfile.TemporaryDirectory() as directory:
             with patch(
-                "profile_enrollment.AsyncCamoufox",
+                "claude_web_api.enrollment.manager.AsyncCamoufox",
                 FakeCamoufox,
             ):
                 snapshot = await manager.launch("claude", directory)
@@ -164,7 +164,7 @@ class ProviderEnrollmentTests(unittest.IsolatedAsyncioTestCase):
         manager = ProfileEnrollmentManager()
         with tempfile.TemporaryDirectory() as directory:
             with patch(
-                "profile_enrollment._ChromeEnrollmentBrowser",
+                "claude_web_api.enrollment.manager._ChromeEnrollmentBrowser",
                 FakeChromeEnrollmentBrowser,
             ):
                 snapshot = await manager.launch(
@@ -188,7 +188,7 @@ class ProviderEnrollmentTests(unittest.IsolatedAsyncioTestCase):
         manager = ProfileEnrollmentManager()
         with tempfile.TemporaryDirectory() as directory:
             with patch(
-                "profile_enrollment.AsyncCamoufox",
+                "claude_web_api.enrollment.manager.AsyncCamoufox",
                 FakeCamoufox,
             ):
                 await manager.launch("claude", directory)
@@ -212,11 +212,11 @@ class ProviderEnrollmentTests(unittest.IsolatedAsyncioTestCase):
             profile_path = Path(directory).resolve()
             with (
                 patch(
-                    "profile_enrollment.async_playwright",
+                    "claude_web_api.enrollment.manager.async_playwright",
                     return_value=playwright_manager,
                 ),
                 patch(
-                    "profile_enrollment._installed_chrome_executable",
+                    "claude_web_api.enrollment.manager._installed_chrome_executable",
                     return_value=r"C:\Program Files\Google\Chrome\chrome.exe",
                 ),
             ):
@@ -250,11 +250,11 @@ class ProviderEnrollmentTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             with (
                 patch(
-                    "profile_enrollment.async_playwright",
+                    "claude_web_api.enrollment.manager.async_playwright",
                     return_value=playwright_manager,
                 ),
                 patch(
-                    "profile_enrollment._installed_chrome_executable",
+                    "claude_web_api.enrollment.manager._installed_chrome_executable",
                     return_value=None,
                 ),
                 patch.dict(

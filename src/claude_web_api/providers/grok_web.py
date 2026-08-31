@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 from urllib.parse import urlsplit
 
-from provider_contracts import (
+from claude_web_api.providers.contracts import (
     ProviderCapabilities,
     ProviderEvent,
     ProviderEventKind,
@@ -35,7 +35,6 @@ from provider_contracts import (
     ProviderTurnRequest,
     ToolContinuation,
 )
-
 
 GROK_WEB_PROVIDER_ID = "grok_web"
 GROK_WEB_ORIGIN = "https://grok.com"
@@ -1015,8 +1014,8 @@ __all__ = [
     "GrokCapabilityUnavailableError",
     "GrokModelCatalogEntry",
     "GrokModelEntitlement",
-    "GrokProtocolVerifier",
     "GrokProtocolUnverifiedError",
+    "GrokProtocolVerifier",
     "GrokProtocolViolationError",
     "GrokProviderNotReadyError",
     "GrokStreamProtocol",

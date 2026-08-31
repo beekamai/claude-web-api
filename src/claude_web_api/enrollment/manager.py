@@ -15,7 +15,6 @@ from urllib.parse import urlsplit, urlunsplit
 from camoufox.async_api import AsyncCamoufox
 from playwright.async_api import async_playwright
 
-
 MODEL_ID_RE = re.compile(
     r"claude-(?:opus|sonnet|haiku)-[a-z0-9][a-z0-9._-]*",
     re.I,

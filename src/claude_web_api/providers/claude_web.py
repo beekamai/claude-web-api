@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
-from provider_contracts import (
+from claude_web_api.providers.contracts import (
     ProviderCapabilities,
     ProviderEvent,
     ProviderEventKind,
@@ -24,7 +24,6 @@ from provider_contracts import (
     ProviderTurnRequest,
     ToolContinuation,
 )
-
 
 CLAUDE_WEB_PROVIDER_ID = "claude_web"
 

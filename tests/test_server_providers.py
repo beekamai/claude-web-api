@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
-import server
-from control_config import ControlConfig
+import claude_web_api.app as server
+from claude_web_api.control.config import ControlConfig
 
 
 class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):

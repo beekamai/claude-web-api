@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from profile_enrollment import _normalize_enrollment_models
+from claude_web_api.enrollment.manager import _normalize_enrollment_models
 
 
 class EnrollmentModelNormalizationTests(unittest.TestCase):
