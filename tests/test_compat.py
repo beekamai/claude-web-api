@@ -20,6 +20,7 @@ os.environ["OPENCLAUDE_TELEMETRY_DB"] = str(
 )
 
 import claude_web_api.app as server
+from claude_web_api import sanitize
 from claude_web_api.control.config import (
     CONFIG_VERSION,
     SUPPORTED_PROFILE_PROVIDERS,
@@ -44,6 +45,7 @@ from claude_web_api.protocol.openai import (
     trailing_tool_results,
     user_selected_persona_message,
 )
+from claude_web_api.protocol.openai_usage import openai_usage
 from claude_web_api.session.claude import (
     MODEL_SELECTOR_TRANSIENT_REASONS,
     ClaudeAccountIdentityError,
@@ -2729,10 +2731,10 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(server._client_starts_fresh_chat(body))
 
     def test_partial_or_boolean_usage_is_not_fabricated(self) -> None:
-        self.assertIsNone(server._openai_usage({"input_tokens": 10}))
-        self.assertIsNone(server._openai_usage({"output_tokens": 5}))
+        self.assertIsNone(openai_usage({"input_tokens": 10}))
+        self.assertIsNone(openai_usage({"output_tokens": 5}))
         self.assertIsNone(
-            server._openai_usage(
+            openai_usage(
                 {"input_tokens": True, "output_tokens": 5}
             )
         )
@@ -2746,9 +2748,9 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         ]
         for row in invalid_rows:
             with self.subTest(row=row):
-                self.assertIsNone(server._openai_usage(row))
+                self.assertIsNone(openai_usage(row))
         self.assertIsNone(
-            server._openai_usage(
+            openai_usage(
                 {
                     "input_tokens": 4,
                     "output_tokens": 5,
@@ -2761,7 +2763,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
     def test_anthropic_cache_usage_is_included_in_openai_prompt_total(
         self,
     ) -> None:
-        usage = server._openai_usage(
+        usage = openai_usage(
             {
                 "input_tokens": 10,
                 "cache_read_input_tokens": 20,
@@ -2790,7 +2792,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             "sk-abcdefghijklmnopqrstuvwxyz "
             "123e4567-e89b-12d3-a456-426614174000"
         )
-        safe = server._sanitize_public_text(message)
+        safe = sanitize.sanitize_public_text(message)
         self.assertNotIn("abc-secret", safe)
         self.assertNotIn("raw-token", safe)
         self.assertNotIn("json-access", safe)
@@ -3626,7 +3628,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
 
     def test_public_error_masks_account_identifiers(self) -> None:
         raw_uuid = "11111111-1111-1111-1111-111111111111"
-        message = server._public_error_message(
+        message = sanitize.public_error_message(
             RuntimeError(
                 f"GET /organizations/{raw_uuid}?token=secret-value failed"
             )

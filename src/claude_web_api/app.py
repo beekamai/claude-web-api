@@ -9,15 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import os
 import re
 import time
 import uuid
-from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from functools import partial
 from pathlib import Path
 from typing import Annotated, Any, Callable
 
@@ -54,6 +50,7 @@ from claude_web_api.protocol.openai import (
     trailing_tool_results,
     user_selected_persona_message,
 )
+from claude_web_api.protocol.openai_usage import openai_usage
 from claude_web_api.providers.claude_web import (
     CLAUDE_WEB_PROVIDER_ID,
     ClaudeWebProviderAdapter,
@@ -66,6 +63,7 @@ from claude_web_api.providers.contracts import (
     ProviderTurnRequest,
 )
 from claude_web_api.providers.registry import ProviderRegistry
+from claude_web_api.sanitize import public_error_message, sanitize_public_text
 from claude_web_api.session.claude import (
     ClaudeAccountIdentityError,
     ClaudeBrowserUnavailableError,
@@ -78,7 +76,8 @@ from claude_web_api.session.claude import (
     NativeToolUse,
     NativeTurn,
 )
-from claude_web_api.telemetry.store import TelemetryStore, stable_session_key
+from claude_web_api.telemetry.runtime import RuntimeTelemetry
+from claude_web_api.telemetry.store import TelemetryStore
 
 BRIDGE_INSTRUCTIONS = PROJECT_INSTRUCTIONS.read_text(encoding="utf-8")
 HEADLESS = os.getenv("CLAUDE_HEADLESS", "0").lower() in ("1", "true", "yes")
@@ -315,449 +314,14 @@ def _provider_capabilities_snapshot() -> dict[str, dict[str, object]]:
     return snapshot
 
 
-UUID_TEXT_RE = re.compile(
-    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
-    r"[0-9a-f]{4}-[0-9a-f]{12}\b",
-    re.IGNORECASE,
-)
-SECRET_QUERY_RE = re.compile(
-    r"([?&](?:"
-    r"code|token|access_token|refresh_token|id_token|"
-    r"api_key|api-key|session|key|secret|credential|auth"
-    r")=)[^&\s]+",
-    re.IGNORECASE,
-)
-COOKIE_HEADER_RE = re.compile(
-    r"(?im)\b(cookie|set-cookie)(\s*:\s*)[^\r\n]*"
-)
-SECRET_HEADER_RE = re.compile(
-    r"(?im)\b(authorization|x-api-key|api-key)"
-    r"(\s*[:=]\s*)[^\r\n,;]+"
-)
-SECRET_ASSIGNMENT_RE = re.compile(
-    r"(?i)\b("
-    r"access_token|refresh_token|id_token|api_key|api-key|"
-    r"client_secret|secret_key|credential|password|passwd"
-    r")(\s*[:=]\s*)[^&\s,;}]+"
-)
-JSON_SECRET_RE = re.compile(
-    r"""(?i)(["'](?:access_token|refresh_token|id_token|api_key|api-key|"""
-    r"""client_secret|secret_key|credential|password|passwd)["']\s*:\s*)"""
-    r"""(["'])(.*?)\2"""
-)
-SECRET_TOKEN_RE = re.compile(
-    r"(?i)\b("
-    r"sk-[a-z0-9_-]{12,}|"
-    r"gh[pousr]_[a-z0-9]{12,}|"
-    r"AKIA[0-9A-Z]{12,}|"
-    r"eyJ[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}"
-    r")\b"
-)
-PRIVATE_KEY_RE = re.compile(
-    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?"
-    r"-----END [A-Z0-9 ]*PRIVATE KEY-----",
-    re.DOTALL,
-)
 
-
-def _sanitize_public_text(value: Any, limit: int = 1_000) -> str:
-    text = str(value or "").strip()
-    text = UUID_TEXT_RE.sub(
-        lambda match: f"…{match.group(0)[-8:]}",
-        text,
-    )
-    text = SECRET_QUERY_RE.sub(r"\1<redacted>", text)
-    text = COOKIE_HEADER_RE.sub(r"\1\2<redacted>", text)
-    text = SECRET_HEADER_RE.sub(r"\1\2<redacted>", text)
-    text = JSON_SECRET_RE.sub(r"\1\2<redacted>\2", text)
-    text = SECRET_ASSIGNMENT_RE.sub(r"\1\2<redacted>", text)
-    text = SECRET_TOKEN_RE.sub("<redacted-token>", text)
-    text = PRIVATE_KEY_RE.sub("<redacted-private-key>", text)
-    return text[:limit]
-
-
-def _public_error_message(error: BaseException) -> str:
-    """Keep local diagnostics useful without returning account identifiers."""
-    return _sanitize_public_text(
-        str(error).strip() or type(error).__name__
-    )
-
-
-class RuntimeTelemetry:
-    """Live counters plus a bounded, secret-free persistent journal."""
-
-    def __init__(self, store: TelemetryStore | None = None) -> None:
-        self.events: deque[dict[str, Any]] = deque(maxlen=200)
-        self._active_by_id: dict[str, dict[str, Any]] = {}
-        self.last: dict[str, Any] | None = None
-        self.store = store
-        self.storage_error: str | None = None
-        self._finished_since_prune = 0
-        self._store_executor: ThreadPoolExecutor | None = None
-        self._pending_store_tasks: set[asyncio.Future[Any]] = set()
-
-    def _executor(self) -> ThreadPoolExecutor:
-        if self._store_executor is None:
-            self._store_executor = ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix="openclaude-telemetry",
-            )
-        return self._store_executor
-
-    def _store_call(
-        self,
-        method: str,
-        /,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        if self.store is None:
-            return None
-        try:
-            value = getattr(self.store, method)(*args, **kwargs)
-            self.storage_error = None
-            return value
-        except Exception as exc:
-            self.storage_error = _public_error_message(exc)
-            return None
-
-    async def store_call_async(
-        self,
-        method: str,
-        /,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        """Run every SQLite operation on one ordered worker thread."""
-        if self.store is None:
-            raise RuntimeError("persistent telemetry storage is unavailable")
-        operation = partial(
-            getattr(self.store, method),
-            *args,
-            **kwargs,
-        )
-        try:
-            value = await asyncio.get_running_loop().run_in_executor(
-                self._executor(),
-                operation,
-            )
-            self.storage_error = None
-            return value
-        except Exception as exc:
-            self.storage_error = _public_error_message(exc)
-            raise
-
-    def _store_submit(
-        self,
-        method: str,
-        /,
-        *args: Any,
-        **kwargs: Any,
-    ) -> None:
-        """Queue a write without stalling streaming or Camoufox work."""
-        if self.store is None:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            self._store_call(method, *args, **kwargs)
-            return
-        operation = partial(
-            getattr(self.store, method),
-            *args,
-            **kwargs,
-        )
-        future = loop.run_in_executor(self._executor(), operation)
-        self._pending_store_tasks.add(future)
-
-        def completed(task: asyncio.Future[Any]) -> None:
-            self._pending_store_tasks.discard(task)
-            try:
-                task.result()
-                self.storage_error = None
-            except asyncio.CancelledError:
-                return
-            except Exception as exc:
-                self.storage_error = _public_error_message(exc)
-
-        future.add_done_callback(completed)
-
-    async def flush_store(self) -> None:
-        pending = list(self._pending_store_tasks)
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-
-    async def close_store_executor(self) -> None:
-        await self.flush_store()
-        executor = self._store_executor
-        self._store_executor = None
-        if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=False)
-
-    def log(
-        self,
-        level: str,
-        component: str,
-        message: str,
-        *,
-        request_id: str | None = None,
-    ) -> None:
-        now = time.time()
-        safe_message = _sanitize_public_text(message)
-        event = {
-            "time": now,
-            "level": str(level or "INFO").upper()[:16],
-            "component": str(component or "Service")[:80],
-            "message": safe_message,
-        }
-        self.events.appendleft(event)
-        self._store_submit(
-            "record_event",
-            event_time=now,
-            level=event["level"],
-            component=event["component"],
-            message=safe_message,
-            request_id=request_id,
-        )
-
-    def begin(
-        self,
-        request_id: str,
-        model: str,
-        profile_id: str,
-        *,
-        provider_id: str = CLAUDE_WEB_PROVIDER_ID,
-        client_session_id: str | None = None,
-        session_key: str | None = None,
-        user_text: str | None = None,
-        streaming: bool = False,
-        privacy_mode: str = "keep",
-        capture_content: bool = False,
-    ) -> None:
-        started_at = time.time()
-        session_key = session_key or stable_session_key(
-            client_session_id,
-            request_id,
-        )
-        self._active_by_id[request_id] = {
-            "request_id": request_id,
-            "model": model,
-            "profile_id": profile_id,
-            "provider_id": provider_id,
-            "session_suffix": session_key[-8:],
-            "started_at": started_at,
-            "first_token_at": None,
-            "text_chars": 0,
-            "thinking_chars": 0,
-            "estimated_output_tokens": 0,
-            "actual_usage": None,
-            "status": "streaming" if streaming else "running",
-            "streaming": bool(streaming),
-            "privacy_mode": privacy_mode,
-            "capture_content": bool(capture_content),
-            "user_text": user_text,
-        }
-        self._store_submit(
-            "begin_request",
-            request_id=request_id,
-            session_key=session_key,
-            profile_id=profile_id,
-            provider_id=provider_id,
-            requested_model=model,
-            started_at=started_at,
-            streaming=streaming,
-            privacy_mode=privacy_mode,
-            user_text=user_text,
-            capture_content=capture_content,
-        )
-
-    def native_event(
-        self,
-        request_id: str,
-        event: dict[str, Any],
-    ) -> None:
-        active = self._active_by_id.get(request_id)
-        if active is None:
-            return
-        event_type = event.get("type")
-        if event_type == "text_delta":
-            text = str(event.get("text") or "")
-            active["text_chars"] += len(text)
-            if text and active.get("first_token_at") is None:
-                active["first_token_at"] = time.time()
-        elif event_type == "thinking_delta":
-            thinking = str(event.get("thinking") or "")
-            active["thinking_chars"] += len(thinking)
-            if thinking and active.get("first_token_at") is None:
-                active["first_token_at"] = time.time()
-        elif event_type == "usage":
-            active["actual_usage"] = _openai_usage(
-                event.get("usage") or {}
-            )
-        elif event_type == "model" and event.get("model"):
-            active["model"] = str(event["model"])
-        # Explicitly an estimate for the live panel only. OpenAI usage is
-        # emitted solely from upstream usage fields. Thinking is separate.
-        active["estimated_output_tokens"] = (
-            int(active["text_chars"]) + 3
-        ) // 4
-
-    def finish(
-        self,
-        request_id: str,
-        *,
-        status: str,
-        usage: dict[str, Any] | None = None,
-        error: str | None = None,
-        assistant_text: str | None = None,
-        thinking_text: str | None = None,
-        tool_call_count: int = 0,
-        resolved_model: str | None = None,
-        final_profile_id: str | None = None,
-        final_provider_id: str | None = None,
-        capture_content: bool | None = None,
-        retention_days: int = 30,
-        max_requests: int = 5_000,
-    ) -> None:
-        active = self._active_by_id.pop(request_id, None)
-        if active is None:
-            return
-        finished_at = time.time()
-        active["status"] = status
-        active["finished_at"] = finished_at
-        active["duration_seconds"] = max(
-            0.0,
-            finished_at - float(active["started_at"]),
-        )
-        if usage is not None:
-            active["actual_usage"] = usage
-        if resolved_model:
-            active["model"] = resolved_model
-        if final_profile_id:
-            active["final_profile_id"] = final_profile_id
-        if final_provider_id:
-            active["final_provider_id"] = final_provider_id
-        if assistant_text is not None:
-            active["text_chars"] = len(assistant_text)
-        if thinking_text is not None:
-            active["thinking_chars"] = len(thinking_text)
-        active["estimated_output_tokens"] = (
-            int(active["text_chars"]) + 3
-        ) // 4
-        active["tool_call_count"] = max(0, int(tool_call_count))
-        if error:
-            active["error"] = _sanitize_public_text(error)
-        exact_completion = (
-            active.get("actual_usage", {}).get("completion_tokens")
-            if isinstance(active.get("actual_usage"), dict)
-            else None
-        )
-        first_token_at = active.get("first_token_at")
-        generation_seconds = (
-            finished_at - float(first_token_at)
-            if isinstance(first_token_at, (int, float))
-            and finished_at > float(first_token_at)
-            else None
-        )
-        if (
-            isinstance(exact_completion, int)
-            and generation_seconds is not None
-            and generation_seconds > 0
-        ):
-            active["tokens_per_second"] = (
-                exact_completion / generation_seconds
-            )
-        public_active = {
-            key: value
-            for key, value in active.items()
-            if key not in {"capture_content", "user_text"}
-        }
-        self.last = dict(public_active)
-        should_capture = (
-            bool(active.get("capture_content"))
-            if capture_content is None
-            else bool(capture_content)
-        )
-        self._store_submit(
-            "finish_request",
-            request_id=request_id,
-            status=status,
-            finished_at=finished_at,
-            first_token_at=active.get("first_token_at"),
-            resolved_model=resolved_model or str(active.get("model") or ""),
-            final_profile_id=final_profile_id or active.get("profile_id"),
-            final_provider_id=(
-                final_provider_id or active.get("provider_id")
-            ),
-            usage=active.get("actual_usage"),
-            estimated_output_tokens=active.get("estimated_output_tokens"),
-            output_chars=int(active.get("text_chars") or 0),
-            thinking_chars=int(active.get("thinking_chars") or 0),
-            tool_call_count=int(active.get("tool_call_count") or 0),
-            assistant_text=assistant_text,
-            capture_content=should_capture,
-            error=active.get("error"),
-        )
-        self._finished_since_prune += 1
-        if self._finished_since_prune >= 25:
-            self._finished_since_prune = 0
-            self._store_submit(
-                "prune",
-                retention_days=retention_days,
-                max_requests=max_requests,
-            )
-
-    def has_active(self, request_id: str) -> bool:
-        return request_id in self._active_by_id
-
-    def snapshot(self) -> dict[str, Any]:
-        now = time.time()
-        active_rows = sorted(
-            (
-                {
-                    key: value
-                    for key, value in {
-                        **row,
-                        "elapsed_seconds": max(
-                            0.0,
-                            now - float(row.get("started_at") or now),
-                        ),
-                    }.items()
-                    if key not in {"capture_content", "user_text"}
-                }
-                for row in self._active_by_id.values()
-            ),
-            key=lambda row: float(row.get("started_at") or 0),
-            reverse=True,
-        )
-        return {
-            "active": active_rows[0] if active_rows else None,
-            "active_requests": active_rows,
-            "last": dict(self.last) if self.last else None,
-            "events": list(self.events),
-            "storage": {
-                "persistent": self.store is not None,
-                "healthy": self.store is not None
-                and self.storage_error is None,
-                "error": self.storage_error,
-            },
-        }
-
-    def clear_events(self) -> None:
-        self.events.clear()
-        self._store_call("clear_events")
-
-    def clear_all(self) -> None:
-        self.events.clear()
-        self.last = None
-        self._store_call("clear_all")
 
 
 try:
     telemetry = RuntimeTelemetry(TelemetryStore())
 except Exception as telemetry_error:
     telemetry = RuntimeTelemetry()
-    telemetry.storage_error = _public_error_message(telemetry_error)
+    telemetry.storage_error = public_error_message(telemetry_error)
 
 
 def _persist_runtime_identity() -> bool:
@@ -856,7 +420,7 @@ async def _telemetry_maintenance() -> None:
             )
             telemetry.storage_error = None
         except Exception as exc:
-            telemetry.storage_error = _public_error_message(exc)
+            telemetry.storage_error = public_error_message(exc)
 
 
 @asynccontextmanager
@@ -1034,21 +598,21 @@ async def chat(body: ChatIn):
         _finish_request_telemetry(
             request_id,
             status="error",
-            error=_public_error_message(exc),
+            error=public_error_message(exc),
         )
         raise HTTPException(409, str(exc)) from exc
     except ClaudeBrowserUnavailableError as exc:
         _finish_request_telemetry(
             request_id,
             status="error",
-            error=_public_error_message(exc),
+            error=public_error_message(exc),
         )
         raise HTTPException(503, str(exc)) from exc
     except Exception as exc:
         _finish_request_telemetry(
             request_id,
             status="error",
-            error=_public_error_message(exc),
+            error=public_error_message(exc),
         )
         raise HTTPException(500, str(exc)) from exc
 
@@ -1668,90 +1232,8 @@ async def _rotate_after_usage_limit(
                 )
 
 
-def _usage_integer(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int) and value >= 0:
-        return value
-    if (
-        isinstance(value, float)
-        and math.isfinite(value)
-        and value >= 0
-        and value.is_integer()
-    ):
-        return int(value)
-    return None
 
 
-def _openai_usage(raw: dict[str, Any]) -> dict[str, Any] | None:
-    if not isinstance(raw, dict) or not raw:
-        return None
-    completion = raw.get("output_tokens", raw.get("completion_tokens"))
-    completion_tokens = _usage_integer(completion)
-    if "input_tokens" in raw:
-        input_tokens = _usage_integer(raw.get("input_tokens"))
-        has_cache_read = "cache_read_input_tokens" in raw
-        has_cache_creation = "cache_creation_input_tokens" in raw
-        cache_read_tokens = (
-            _usage_integer(raw.get("cache_read_input_tokens"))
-            if has_cache_read
-            else 0
-        )
-        cache_creation_tokens = (
-            _usage_integer(raw.get("cache_creation_input_tokens"))
-            if has_cache_creation
-            else 0
-        )
-        if (
-            input_tokens is None
-            or cache_read_tokens is None
-            or cache_creation_tokens is None
-        ):
-            return None
-        # Anthropic reports uncached input, cache reads, and cache writes as
-        # separate buckets. OpenAI's prompt_tokens is their combined total.
-        prompt_tokens = (
-            input_tokens
-            + (cache_read_tokens or 0)
-            + (cache_creation_tokens or 0)
-        )
-    else:
-        prompt_tokens = _usage_integer(raw.get("prompt_tokens"))
-        prompt_details = raw.get("prompt_tokens_details")
-        cache_read_tokens = (
-            _usage_integer(prompt_details.get("cached_tokens"))
-            if isinstance(prompt_details, dict)
-            else None
-        )
-    if prompt_tokens is None or completion_tokens is None:
-        return None
-    usage: dict[str, Any] = {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        # Derive this field so malformed or cumulative upstream totals cannot
-        # make the public response internally inconsistent.
-        "total_tokens": prompt_tokens + completion_tokens,
-    }
-    if (
-        cache_read_tokens is not None
-        and (
-            "cache_read_input_tokens" in raw
-            or "prompt_tokens_details" in raw
-        )
-    ):
-        usage["prompt_tokens_details"] = {
-            "cached_tokens": cache_read_tokens
-        }
-    output_details = raw.get("output_tokens_details")
-    if isinstance(output_details, dict):
-        safe_details = {
-            str(key): parsed
-            for key, value in output_details.items()
-            if (parsed := _usage_integer(value)) is not None
-        }
-        if safe_details:
-            usage["completion_tokens_details"] = safe_details
-    return usage
 
 
 def _telemetry_content_enabled() -> bool:
@@ -1810,7 +1292,7 @@ def _finish_request_telemetry(
     parsed = _parsed_native(native) if native is not None else None
     if native is not None:
         if usage is None:
-            usage = _openai_usage(native.usage)
+            usage = openai_usage(native.usage)
         if assistant_text is None:
             assistant_text = native.content
         resolved_model = native.model or resolved_model
@@ -1818,7 +1300,7 @@ def _finish_request_telemetry(
         request_id,
         status=status,
         usage=usage,
-        error=_sanitize_public_text(error) if error else None,
+        error=sanitize_public_text(error) if error else None,
         assistant_text=assistant_text,
         thinking_text=native.thinking if native is not None else None,
         tool_call_count=len(parsed.tool_calls) if parsed is not None else 0,
@@ -1835,7 +1317,7 @@ def _finish_request_telemetry(
         telemetry.log(
             "ERROR",
             "API",
-            _sanitize_public_text(error),
+            sanitize_public_text(error),
             request_id=request_id,
         )
 
@@ -1881,7 +1363,7 @@ def _completion_response(
             }
         ],
     }
-    usage = _openai_usage(native.usage)
+    usage = openai_usage(native.usage)
     if usage is not None:
         payload["usage"] = usage
     return payload
@@ -1971,7 +1453,7 @@ def _stream_error(exc: Exception) -> str:
     detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
     payload = {
         "error": {
-            "message": _sanitize_public_text(detail),
+            "message": sanitize_public_text(detail),
             "type": "claude_web_error",
             "code": status,
         }
@@ -2117,7 +1599,7 @@ async def _chat_event_stream(
                     ]
                 },
             )
-        usage = _openai_usage(native.usage)
+        usage = openai_usage(native.usage)
         # Persist completion before the terminal chunk. Some OpenAI clients
         # close the transport immediately after finish_reason and would
         # otherwise cancel this generator before telemetry is finalized.
@@ -2167,7 +1649,7 @@ async def _chat_event_stream(
             await asyncio.gather(task, return_exceptions=True)
         if isinstance(exc, ClaudeAccountIdentityError):
             _persist_runtime_identity()
-        safe_error = _public_error_message(exc)
+        safe_error = public_error_message(exc)
         _finish_request_telemetry(
             request_id,
             status="error",
@@ -2243,7 +1725,7 @@ async def _completed_event_stream(
         {},
         _finish_reason(native, parsed),
     )
-    usage = _openai_usage(native.usage)
+    usage = openai_usage(native.usage)
     if (
         usage is not None
         and body.stream_options is not None
@@ -2346,7 +1828,7 @@ async def openai_compat(
             event_sink=None,
         )
         resolved_model = native.model or model
-        usage = _openai_usage(native.usage)
+        usage = openai_usage(native.usage)
         _finish_request_telemetry(
             request_id,
             status="completed",
@@ -2380,14 +1862,14 @@ async def openai_compat(
         _finish_request_telemetry(
             request_id,
             status="error",
-            error=_sanitize_public_text(exc.detail),
+            error=sanitize_public_text(exc.detail),
         )
         raise
     except ClaudeTurnOutcomeUnknownError as exc:
         _finish_request_telemetry(
             request_id,
             status="error",
-            error=_public_error_message(exc),
+            error=public_error_message(exc),
         )
         raise HTTPException(409, str(exc)) from exc
     except ClaudeAccountIdentityError as exc:
@@ -2395,42 +1877,42 @@ async def openai_compat(
         _finish_request_telemetry(
             request_id,
             status="error",
-            error=_public_error_message(exc),
+            error=public_error_message(exc),
         )
         raise HTTPException(409, str(exc)) from exc
     except ClaudeBrowserUnavailableError as exc:
         _finish_request_telemetry(
             request_id,
             status="error",
-            error=_public_error_message(exc),
+            error=public_error_message(exc),
         )
         raise HTTPException(503, str(exc)) from exc
     except ClaudeServiceUnavailableError as exc:
         _finish_request_telemetry(
             request_id,
             status="error",
-            error=_public_error_message(exc),
+            error=public_error_message(exc),
         )
         raise HTTPException(503, str(exc)) from exc
     except ClaudeCompletionRejectedError as exc:
         _finish_request_telemetry(
             request_id,
             status="error",
-            error=_public_error_message(exc),
+            error=public_error_message(exc),
         )
         raise HTTPException(exc.status, str(exc)) from exc
     except ValueError as exc:
         _finish_request_telemetry(
             request_id,
             status="error",
-            error=_public_error_message(exc),
+            error=public_error_message(exc),
         )
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         _finish_request_telemetry(
             request_id,
             status="error",
-            error=_public_error_message(exc),
+            error=public_error_message(exc),
         )
         raise HTTPException(500, str(exc)) from exc
 
@@ -2592,7 +2074,7 @@ async def control_telemetry(
         )
         telemetry.storage_error = None
     except Exception as exc:
-        telemetry.storage_error = _public_error_message(exc)
+        telemetry.storage_error = public_error_message(exc)
         raise HTTPException(
             503,
             "persistent telemetry query failed",
@@ -2652,7 +2134,7 @@ async def update_telemetry_settings(body: TelemetryPatch):
         )
         telemetry.storage_error = None
     except Exception as exc:
-        telemetry.storage_error = _public_error_message(exc)
+        telemetry.storage_error = public_error_message(exc)
         return JSONResponse(
             status_code=503,
             content={
@@ -2706,7 +2188,7 @@ async def control_telemetry_request(request_id: str):
             request_id.removeprefix("chatcmpl-"),
         )
     except Exception as exc:
-        telemetry.storage_error = _public_error_message(exc)
+        telemetry.storage_error = public_error_message(exc)
         raise HTTPException(
             503,
             "persistent telemetry query failed",
@@ -3126,7 +2608,7 @@ async def _inspect_profile_login_once(profile_id: str):
         )
         result["status"] = "project_setup_error"
         result["ready"] = False
-        result["project_error"] = _public_error_message(exc)
+        result["project_error"] = public_error_message(exc)
         return {"ok": True, "login": result}
     identity = await enrollment.internal_identity(profile_id)
     control.update_profile(
