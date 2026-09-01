@@ -22,7 +22,6 @@ os.environ["OPENCLAUDE_TELEMETRY_DB"] = str(
 import claude_web_api.app as server
 from claude_web_api import runtime, sanitize
 from claude_web_api.api import control as control_api
-from claude_web_api.providers.claude_web import CLAUDE_WEB_PROVIDER_ID
 from claude_web_api.control.config import (
     CONFIG_VERSION,
     SUPPORTED_PROFILE_PROVIDERS,

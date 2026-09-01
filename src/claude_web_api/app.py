@@ -1572,9 +1572,6 @@ async def list_models():
     return {"object": "list", "data": rows}
 
 
-@app.get("/api/control/state")
-
-
 def main() -> None:
     """Run the bridge on the loopback interface."""
     import uvicorn

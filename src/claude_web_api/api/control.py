@@ -52,6 +52,7 @@ class ModelSelect(BaseModel):
     model: str = Field(min_length=1, max_length=160)
 
 
+@router.get("/api/control/state")
 async def control_state():
     snapshot = runtime.control.snapshot()
     persona_compilation = ControlConfig.persona_compilation_for(

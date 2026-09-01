@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
-import claude_web_api.app as server
 from claude_web_api import runtime
 from claude_web_api.api import control as control_api
 from claude_web_api.control.config import ControlConfig
