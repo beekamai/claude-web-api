@@ -7,7 +7,9 @@ from fastapi import HTTPException
 
 import claude_web_api.app as server
 from claude_web_api import runtime
+from claude_web_api.api import control as control_api
 from claude_web_api.control.config import ControlConfig
+from claude_web_api.providers.claude_web import CLAUDE_WEB_PROVIDER_ID
 
 
 class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
@@ -44,7 +46,7 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.control_patch.stop)
         self.registry = runtime.ProviderRegistry()
         self.registry.register(
-            server.CLAUDE_WEB_PROVIDER_ID,
+            CLAUDE_WEB_PROVIDER_ID,
             runtime.claude_provider,
             profile_ids=("default",),
         )
@@ -67,8 +69,8 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_profile_create_persists_requested_browser_provider(
         self,
     ) -> None:
-        response = await server.create_profile(
-            server.ProfileCreate(name="Grok spare", provider="grok_web")
+        response = await control_api.create_profile(
+            control_api.ProfileCreate(name="Grok spare", provider="grok_web")
         )
 
         self.assertTrue(response["ok"])
@@ -82,8 +84,8 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
             self.registry.provider_id_for_profile(response["profile"]["id"])
 
     async def test_new_claude_profile_is_bound_to_claude_provider(self) -> None:
-        response = await server.create_profile(
-            server.ProfileCreate(name="Claude spare", provider="claude_web")
+        response = await control_api.create_profile(
+            control_api.ProfileCreate(name="Claude spare", provider="claude_web")
         )
 
         profile_id = response["profile"]["id"]
@@ -112,7 +114,7 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
                 return_value=True,
             ),
         ):
-            await server.activate_profile("default")
+            await control_api.activate_profile("default")
 
         self.assertEqual(
             "claude_web",
@@ -201,7 +203,7 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
                         ),
                     ),
                 ):
-                    response = await server._inspect_profile_login_once(
+                    response = await control_api._inspect_profile_login_once(
                         self.grok["id"]
                     )
 
@@ -219,7 +221,7 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
             "is_running",
             AsyncMock(return_value=False),
         ):
-            response = await server._inspect_profile_login_once(
+            response = await control_api._inspect_profile_login_once(
                 self.grok["id"]
             )
 
@@ -282,7 +284,7 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
                 ensure_project,
             ),
         ):
-            response = await server._inspect_profile_login_once(
+            response = await control_api._inspect_profile_login_once(
                 self.grok["id"]
             )
 
@@ -300,7 +302,7 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unverified_grok_runtime_cannot_be_activated(self) -> None:
         with self.assertRaises(HTTPException) as raised:
-            await server.activate_profile(self.grok["id"])
+            await control_api.activate_profile(self.grok["id"])
 
         self.assertEqual(409, raised.exception.status_code)
         self.assertIn("protocol", str(raised.exception.detail).lower())

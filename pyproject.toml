@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-web-api"
-version = "0.1.0"
+version = "3.1.0"
 description = "Local OpenAI- and Anthropic-compatible bridge to authorised model web sessions"
 readme = "README.md"
 requires-python = ">=3.12"

@@ -350,6 +350,13 @@ def persist_runtime_identity() -> bool:
     return True
 
 
+def telemetry_content_enabled() -> bool:
+    """Content is journalled only when both the setting and privacy mode allow it."""
+    settings = control.telemetry_settings()
+    privacy_mode = str(control.behavior().get("privacy") or "keep")
+    return bool(settings.get("store_content")) and privacy_mode != "ephemeral"
+
+
 async def telemetry_maintenance() -> None:
     while True:
         await asyncio.sleep(3_600)

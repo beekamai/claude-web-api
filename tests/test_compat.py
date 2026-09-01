@@ -21,6 +21,8 @@ os.environ["OPENCLAUDE_TELEMETRY_DB"] = str(
 
 import claude_web_api.app as server
 from claude_web_api import runtime, sanitize
+from claude_web_api.api import control as control_api
+from claude_web_api.providers.claude_web import CLAUDE_WEB_PROVIDER_ID
 from claude_web_api.control.config import (
     CONFIG_VERSION,
     SUPPORTED_PROFILE_PROVIDERS,
@@ -2012,9 +2014,9 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             return_value=profile,
         ):
             with self.assertRaises(server.HTTPException) as raised:
-                await server.select_profile_model(
+                await control_api.select_profile_model(
                     "default",
-                    server.ModelSelect(model="claude-fable-5"),
+                    control_api.ModelSelect(model="claude-fable-5"),
                 )
         self.assertEqual(400, raised.exception.status_code)
 
@@ -2684,8 +2686,8 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(runtime, "control", config),
                 patch.object(runtime.telemetry, "log"),
             ):
-                patched = await server.update_behavior(
-                    server.BehaviorPatch(
+                patched = await control_api.update_behavior(
+                    control_api.BehaviorPatch(
                         persona="custom",
                         custom_persona=raw,
                         actor=True,
@@ -2713,7 +2715,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                     return_value=[],
                 ),
             ):
-                state = await server.control_state()
+                state = await control_api.control_state()
 
             self.assertEqual(
                 patched["persona_compilation"],
@@ -2884,7 +2886,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                     return_value=behavior,
                 ),
             ):
-                response = await server.control_telemetry(
+                response = await control_api.control_telemetry(
                     period="all",
                     status="all",
                     provider_id="grok_web",
@@ -2915,7 +2917,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(2, len(payload["events"]["items"]))
                 self.assertEqual(0, payload["events"]["offset"])
                 self.assertFalse(payload["events"]["has_more"])
-                detail_response = await server.control_telemetry_request(
+                detail_response = await control_api.control_telemetry_request(
                     "abcdef123456"
                 )
                 detail = json.loads(detail_response.body)["request"]
