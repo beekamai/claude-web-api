@@ -331,7 +331,8 @@ class ProtocolRoutingTests(unittest.IsolatedAsyncioTestCase):
         write_prompt = AsyncMock()
         with (
             patch(
-                "claude_web_api.session.claude.KNOWN_OPENCLAUDE_PROJECT_PROMPT_SHA256",
+                "claude_web_api.session.project."
+                "KNOWN_OPENCLAUDE_PROJECT_PROMPT_SHA256",
                 {previous_hash},
             ),
             patch.object(

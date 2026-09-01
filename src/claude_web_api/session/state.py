@@ -31,6 +31,12 @@ class SessionState:
     _model_selector_cache_max_age_ms: int
     _model_selector_wait_ms: int
     _last_error: str | None
+    _project_instructions: str
+    _project_prompt_lease_file: Any
+    _project_instructions_synced: bool
+    _project_sync_error: str | None
+    _project_privacy_verified: bool | None
+    _project_lease_error: str | None
 
     def current_profile_spec(self) -> dict[str, Any]:
         raise NotImplementedError
