@@ -11,6 +11,9 @@ from claude_web_api.app import app
 EXPECTED_PATHS = {
     "/",
     "/api/control/behavior",
+    "/api/control/clients",
+    "/api/control/clients/{client_id}/configure",
+    "/api/control/clients/{client_id}/install",
     "/api/control/events",
     "/api/control/profiles",
     "/api/control/profiles/{profile_id}/activate",

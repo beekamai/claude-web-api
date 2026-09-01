@@ -18,11 +18,14 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from claude_web_api import __version__, runtime
+from claude_web_api import __version__, clients, runtime
 from claude_web_api.control.config import ControlConfig
 from claude_web_api.paths import PROJECT_INSTRUCTIONS, PROJECT_ROOT
 from claude_web_api.providers.claude_web import CLAUDE_WEB_PROVIDER_ID
-from claude_web_api.sanitize import public_error_message
+from claude_web_api.sanitize import (
+    public_error_message,
+    sanitize_public_text,
+)
 from claude_web_api.telemetry.store import TelemetryStore
 
 router = APIRouter()
@@ -927,3 +930,119 @@ async def clear_control_events():
     if runtime.telemetry.storage_error:
         raise HTTPException(503, "could not clear persistent event log")
     return {"ok": True}
+
+
+def _bridge_port() -> int:
+    return int(os.getenv("PORT", "8765"))
+
+
+@router.get("/api/control/clients")
+async def control_clients():
+    """What the coding clients on this machine are pointed at."""
+    return clients.snapshot(_bridge_port())
+
+
+@router.post("/api/control/clients/{client_id}/configure")
+async def configure_client(client_id: str):
+    definition = clients.find_definition(client_id)
+    if definition is None:
+        raise HTTPException(404, "unknown client")
+    try:
+        result = clients.configure(definition, _bridge_port())
+    except OSError as exc:
+        raise HTTPException(
+            500,
+            f"не удалось записать настройки клиента: {exc.strerror or exc}",
+        ) from exc
+    runtime.telemetry.log(
+        "INFO",
+        "Clients",
+        f"{definition.name} направлен на мост",
+    )
+    return result
+
+
+@router.post("/api/control/clients/{client_id}/install")
+async def install_client(client_id: str):
+    definition = clients.find_definition(client_id)
+    if definition is None:
+        raise HTTPException(404, "unknown client")
+    if not definition.install_command:
+        raise HTTPException(400, "installation is not supported for this client")
+    state = runtime.client_installs.get(client_id)
+    if state and state.get("status") == "running":
+        return state
+    state = {
+        "client": client_id,
+        "status": "running",
+        "command": " ".join(definition.install_command),
+        "started_at": time.time(),
+        "output": "",
+    }
+    runtime.client_installs[client_id] = state
+    # The state dict is serialised into responses, so the task itself is kept
+    # beside it rather than inside it.
+    runtime.client_install_tasks[client_id] = asyncio.create_task(
+        _run_install(definition, state),
+        name=f"install-{client_id}",
+    )
+    runtime.telemetry.log(
+        "INFO",
+        "Clients",
+        f"Установка {definition.name}: {state['command']}",
+    )
+    return state
+
+
+@router.get("/api/control/clients/{client_id}/install")
+async def install_client_status(client_id: str):
+    state = runtime.client_installs.get(client_id)
+    if state is None:
+        raise HTTPException(404, "no installation has been started")
+    return state
+
+
+async def _run_install(
+    definition: clients.ClientDefinition,
+    state: dict[str, Any],
+) -> None:
+    """Run the client's installer, keeping only a bounded tail of its output."""
+    command = definition.install_command
+    if not command:
+        state.update(status="error", output="installer is not defined")
+        return
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except (OSError, FileNotFoundError) as exc:
+        state.update(
+            status="error",
+            finished_at=time.time(),
+            output=sanitize_public_text(
+                f"не удалось запустить установщик: {exc}"
+            ),
+        )
+        return
+    try:
+        stdout, _ = await asyncio.wait_for(
+            process.communicate(),
+            timeout=900,
+        )
+    except asyncio.TimeoutError:
+        process.kill()
+        state.update(
+            status="error",
+            finished_at=time.time(),
+            output="установка не завершилась за 15 минут",
+        )
+        return
+    text = (stdout or b"").decode("utf-8", "replace")
+    state.update(
+        status="completed" if process.returncode == 0 else "error",
+        finished_at=time.time(),
+        return_code=process.returncode,
+        output=sanitize_public_text(text[-4000:], limit=4000),
+    )

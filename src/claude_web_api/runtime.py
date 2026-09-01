@@ -213,6 +213,9 @@ provider_registry.register(
 )
 enrollment = ProfileEnrollmentManager()
 profile_login_tasks: dict[str, asyncio.Task[dict[str, Any]]] = {}
+# Client installs are long-running; the panel polls their state.
+client_installs: dict[str, dict[str, Any]] = {}
+client_install_tasks: dict[str, asyncio.Task[None]] = {}
 
 
 def bind_claude_profile_route(profile: dict[str, Any]) -> None:
