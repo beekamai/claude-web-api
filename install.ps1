@@ -11,7 +11,21 @@ $ProgressPreference = "SilentlyContinue"
 
 $repo = if ($env:CLAUDE_WEB_API_REPO) { $env:CLAUDE_WEB_API_REPO } else { "beekamai/claude-web-api" }
 $branch = if ($env:CLAUDE_WEB_API_BRANCH) { $env:CLAUDE_WEB_API_BRANCH } else { "main" }
-$target = if ($env:CLAUDE_WEB_API_DIR) { $env:CLAUDE_WEB_API_DIR } else { Join-Path $HOME "claude-web-api" }
+function Test-AsciiPath($path) { return ($path -notmatch '[^\x00-\x7F]') }
+# The portable Python, pip and the Camoufox launcher do not all survive a
+# non-ASCII directory (a Cyrillic user name gives a Cyrillic home), so such
+# homes fall back to the system drive root.
+$defaultDir = if (Test-AsciiPath $HOME) { Join-Path $HOME "claude-web-api" } else { Join-Path $env:SystemDrive "claude-web-api" }
+$target = if ($env:CLAUDE_WEB_API_DIR) { $env:CLAUDE_WEB_API_DIR } else { $defaultDir }
+if (-not (Test-AsciiPath $target)) {
+    throw "The install path '$target' contains non-ASCII characters; set `$env:CLAUDE_WEB_API_DIR to a plain-ASCII path such as C:\claude-web-api."
+}
+if (-not (Test-AsciiPath $env:TEMP)) {
+    # Archives and get-pip.py are staged in TEMP; keep that ASCII as well.
+    $env:TEMP = Join-Path $env:SystemDrive "Temp"
+    $env:TMP = $env:TEMP
+    New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+}
 $autostart = $env:CLAUDE_WEB_API_NO_START -ne "1"
 
 function Step($text) { Write-Host "==> $text" -ForegroundColor Cyan }
@@ -71,7 +85,7 @@ Write-Host ""
 Step "Installed in $target"
 Write-Host "    Start:         .\scripts\start.ps1"
 Write-Host "    Control panel: http://127.0.0.1:8765/control/"
-Write-Host "    Connect a client: the panel's «Подключение» tab configures Claude Code or OpenClaude."
+Write-Host "    Connect a client: the panel's Connect tab configures Claude Code or OpenClaude."
 Write-Host ""
 
 if ($autostart) {

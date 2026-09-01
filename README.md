@@ -51,8 +51,9 @@ and starts the bridge:
 irm https://raw.githubusercontent.com/beekamai/claude-web-api/main/install.ps1 | iex
 ```
 
-It installs into `%USERPROFILE%\claude-web-api` (override with
-`$env:CLAUDE_WEB_API_DIR`), and re-running it updates an existing installation
+It installs into `%USERPROFILE%\claude-web-api`, or `C:\claude-web-api` when the
+user name contains non-ASCII characters (the portable runtime needs a plain
+path; override with `$env:CLAUDE_WEB_API_DIR`), and re-running it updates an existing installation
 without touching the browser profile, `control_config.json` or the journal. Set
 `$env:CLAUDE_WEB_API_NO_START = "1"` to install without starting.
 
@@ -195,7 +196,9 @@ OpenAI-совместимый клиент — через `/v1/chat/completions`
 irm https://raw.githubusercontent.com/beekamai/claude-web-api/main/install.ps1 | iex
 ```
 
-Ставится в `%USERPROFILE%\claude-web-api` (можно задать `$env:CLAUDE_WEB_API_DIR`).
+Ставится в `%USERPROFILE%\claude-web-api`, а если в имени пользователя есть
+кириллица — в `C:\claude-web-api` (переносимому окружению нужен путь без
+не-ASCII символов; задать своё — `$env:CLAUDE_WEB_API_DIR`).
 Повторный запуск обновляет установку и не трогает браузерный профиль,
 `control_config.json` и журнал. `$env:CLAUDE_WEB_API_NO_START = "1"` — поставить
 без запуска.
