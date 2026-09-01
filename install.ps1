@@ -20,12 +20,13 @@ $target = if ($env:CLAUDE_WEB_API_DIR) { $env:CLAUDE_WEB_API_DIR } else { $defau
 if (-not (Test-AsciiPath $target)) {
     throw "The install path '$target' contains non-ASCII characters; set `$env:CLAUDE_WEB_API_DIR to a plain-ASCII path such as C:\claude-web-api."
 }
-if (-not (Test-AsciiPath $env:TEMP)) {
-    # Archives and get-pip.py are staged in TEMP; keep that ASCII as well.
-    $env:TEMP = Join-Path $env:SystemDrive "Temp"
-    $env:TMP = $env:TEMP
-    New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
-}
+# Archives and get-pip.py are staged here rather than in %TEMP%: a Cyrillic
+# user directory reaches Windows PowerShell as an 8.3 short name that
+# Remove-Item then cannot find.
+$staging = Join-Path $env:SystemDrive "Temp\claude-web-api-install"
+New-Item -ItemType Directory -Force -Path $staging | Out-Null
+$env:TEMP = $staging
+$env:TMP = $staging
 $autostart = $env:CLAUDE_WEB_API_NO_START -ne "1"
 
 function Step($text) { Write-Host "==> $text" -ForegroundColor Cyan }
@@ -59,18 +60,18 @@ if (Test-Path (Join-Path $target ".git")) {
     & git clone --depth 1 --branch $branch "https://github.com/$repo" $target
 } else {
     # No git, or a directory that is not a checkout: fall back to the archive.
-    $archive = Join-Path $env:TEMP "claude-web-api-$branch.zip"
-    $unpacked = Join-Path $env:TEMP "claude-web-api-unpack"
+    $archive = Join-Path $staging "claude-web-api-$branch.zip"
+    $unpacked = Join-Path $staging "unpack"
     Invoke-WebRequest -Uri "https://codeload.github.com/$repo/zip/refs/heads/$branch" -OutFile $archive -UseBasicParsing
-    if (Test-Path $unpacked) { Remove-Item -Recurse -Force $unpacked }
+    if (Test-Path $unpacked) { Remove-Item -Recurse -Force $unpacked -ErrorAction SilentlyContinue }
     Expand-Archive -Path $archive -DestinationPath $unpacked -Force
     $source = Get-ChildItem -Directory $unpacked | Select-Object -First 1
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     # Copy the tracked tree only; a previous run's profile and config live in
     # the target and must survive an update.
     Copy-Item -Path (Join-Path $source.FullName "*") -Destination $target -Recurse -Force
-    Remove-Item -Recurse -Force $unpacked
-    Remove-Item -Force $archive
+    Remove-Item -Recurse -Force $unpacked -ErrorAction SilentlyContinue
+    Remove-Item -Force $archive -ErrorAction SilentlyContinue
 }
 
 Set-Location $target
