@@ -175,6 +175,16 @@ def bridge_messages(body: MessagesIn) -> list[dict[str, Any]]:
                     "by the browser bridge"
                 )
 
+        if tool_results and texts:
+            # Clients pack a result and its accompanying note into one user
+            # message. The note belongs to the result, not to a new question:
+            # emitting it as a turn of its own reads as the user interrupting
+            # the continuation, which the completions core refuses.
+            tool_results[-1]["content"] = "\n\n".join(
+                part for part in (tool_results[-1]["content"], *texts) if part
+            )
+            texts = []
+
         if texts or tool_calls:
             entry: dict[str, Any] = {
                 "role": role,

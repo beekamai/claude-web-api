@@ -31,7 +31,10 @@ from claude_web_api.api import openai as openai_api
 from claude_web_api.paths import (
     WEB_ROOT,
 )
-from claude_web_api.sanitize import public_error_message
+from claude_web_api.sanitize import (
+    public_error_message,
+    sanitize_public_text,
+)
 from claude_web_api.session.claude import (
     ClaudeBrowserUnavailableError,
     ClaudeTurnOutcomeUnknownError,
@@ -86,6 +89,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(anthropic_api.router)
+
+@app.exception_handler(HTTPException)
+async def http_error(request: Request, exc: HTTPException):
+    """Messages clients cannot parse FastAPI's error body."""
+    if request.url.path.startswith("/v1/messages"):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=anthropic_api.error_payload(
+                exc.status_code, sanitize_public_text(exc.detail)
+            ),
+            headers=getattr(exc, "headers", None),
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None),
+    )
+
 
 @app.exception_handler(RequestValidationError)
 async def validation_error(request: Request, exc: RequestValidationError):

@@ -7,6 +7,7 @@ import unittest
 from typing import Any
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from claude_web_api import completions
@@ -154,6 +155,72 @@ class MessagesEndpointTests(unittest.TestCase):
         self.assertEqual("tool", result["role"])
         self.assertEqual("toolu_1", result["tool_call_id"])
         self.assertEqual("print('hi')", result["content"])
+
+    def test_note_beside_a_tool_result_travels_with_it(self) -> None:
+        """OpenClaude packs a result and its note into one user message.
+
+        Emitting the note as its own turn reads as the user interrupting the
+        continuation, and the completions core refuses that outright.
+        """
+        with self.run_with(native("ok")):
+            self.post(
+                {
+                    "model": "claude-web",
+                    "max_tokens": 64,
+                    "messages": [
+                        {"role": "user", "content": "read it"},
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "tool_use",
+                                    "id": "toolu_5",
+                                    "name": "Read",
+                                    "input": {},
+                                }
+                            ],
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "toolu_5",
+                                    "content": "file body",
+                                },
+                                {"type": "text", "text": "note about it"},
+                            ],
+                        },
+                    ],
+                }
+            )
+        history = self.captured[0].messages
+        self.assertEqual("tool", history[-1]["role"])
+        self.assertIn("file body", history[-1]["content"])
+        self.assertIn("note about it", history[-1]["content"])
+        self.assertEqual(
+            1, sum(1 for entry in history if entry["role"] == "tool")
+        )
+
+    def test_upstream_http_error_uses_the_anthropic_shape(self) -> None:
+        """A rejection from deeper in the stack must stay parseable."""
+
+        async def rejecting(request_body, **kwargs):
+            del request_body, kwargs
+            raise HTTPException(400, "Model 'x' is not available")
+
+        with patch.object(completions, "run_native_with_limits", new=rejecting):
+            response = self.post(
+                {
+                    "model": "x",
+                    "max_tokens": 16,
+                    "messages": [{"role": "user", "content": "hi"}],
+                }
+            )
+        self.assertEqual(400, response.status_code)
+        body = response.json()
+        self.assertEqual("error", body["type"])
+        self.assertIn("not available", body["error"]["message"])
 
     def test_error_tool_result_keeps_its_flag(self) -> None:
         with self.run_with(native("ясно")):

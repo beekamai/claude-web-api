@@ -89,8 +89,11 @@ $env:OPENAI_API_KEY = "local-claude-web"
 $env:OPENAI_MODEL = "claude-web"
 ```
 
-A reproducible patch for OpenClaude, pinned to an exact upstream commit, lives
-in [`integrations/openclaude/`](integrations/openclaude/).
+**OpenClaude** now speaks the Anthropic surface too, so it needs no patch:
+point `ANTHROPIC_BASE_URL` at the bridge exactly as Claude Code does and pass
+`--model claude-web`. The patch in
+[`integrations/openclaude/`](integrations/openclaude/), pinned to an exact
+upstream commit, applies only to the older OpenAI path.
 
 ## API
 
@@ -206,7 +209,9 @@ claude
 ```
 
 Полная инструкция и список ограничений —
-[`docs/claude-code-setup.md`](docs/claude-code-setup.md).
+[`docs/claude-code-setup.md`](docs/claude-code-setup.md). **OpenClaude**
+подключается так же: те же две переменные и `--model claude-web`, патч из
+`integrations/` для этого не нужен.
 
 ## Панель управления
 

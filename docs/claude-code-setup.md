@@ -58,6 +58,21 @@ $env:CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT = "1"
 }
 ```
 
+## OpenClaude
+
+Подключается теми же двумя переменными — патч из `integrations/openclaude/`
+нужен только для старого OpenAI-пути. Модель придётся передать флагом: свою
+переменную окружения OpenClaude под неё не читает.
+
+```powershell
+openclaude --model claude-web
+```
+
+Если раньше OpenClaude ходил через мост по OpenAI-пути, проверьте
+`~/.openclaude/.openclaude-profile.json`: активный профиль перекрывает
+`settings.json`, и старый профиль продолжит гнать запросы в
+`/v1/chat/completions`.
+
 ## 3. Выбор модели
 
 Модель выбирается в панели управления (`http://127.0.0.1:8765/control/`), а не
