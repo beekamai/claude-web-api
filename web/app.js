@@ -1018,7 +1018,7 @@
         if (note) {
           note.textContent = state.status === "completed"
             ? "Установлено"
-            : `Ошибка установки: ${(state.output || "").slice(-300)}`;
+            : `Ошибка установки: ${(state.output || "").trim().slice(0, 600)}`;
         }
         return state;
       }

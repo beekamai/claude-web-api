@@ -49,10 +49,22 @@ def claude_code_installer(platform: str = os.name) -> tuple[str, ...]:
         # page: a plain -Command reached PowerShell mangled on a Russian
         # Windows and failed to parse. The script also switches its output to
         # UTF-8 so the panel can show it.
+        # claude.ai is not reachable from every network: a blocked region
+        # gets an HTML page back, and piping that into iex yields a parse
+        # error that names nothing. Check the payload before running it.
         script = (
             "$ProgressPreference = 'SilentlyContinue'; "
             "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
-            "try { irm https://claude.ai/install.ps1 | iex } "
+            "try { "
+            "$script = irm https://claude.ai/install.ps1; "
+            "if (-not (\"$script\").TrimStart().StartsWith('param(')) { "
+            "Write-Output ('claude.ai returned something other than the "
+            "installer (' + (\"$script\").Substring(0, "
+            "[Math]::Min(120, (\"$script\").Length)) + '...). "
+            "The site is probably unreachable from this network; "
+            "install Node.js from nodejs.org and retry to use npm instead.'); "
+            "exit 2 } "
+            "Invoke-Expression -Command $script } "
             "catch { Write-Output $_; exit 1 }"
         )
         encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
@@ -154,6 +166,12 @@ def install_plan(
     command = definition.install_command
     if not command:
         return None, "установка из панели не поддерживается"
+    if definition.id == "claude-code" and command[0] != "npm":
+        # npm reaches registry.npmjs.org where claude.ai itself may not be
+        # reachable, so a present npm is the more dependable route.
+        npm = _on_path("npm")
+        if npm:
+            return (npm[0], "install", "-g", "@anthropic-ai/claude-code"), None
     launcher = command[0]
     if launcher == "npm":
         found = _on_path("npm")

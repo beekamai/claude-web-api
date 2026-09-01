@@ -115,6 +115,16 @@ class InstallPlanTests(unittest.TestCase):
         self.assertEqual(r"C:\nodejs\npm.cmd", command[0])
         self.assertEqual("@gitlawb/openclaude", command[-1])
 
+    def test_claude_code_prefers_npm_when_it_is_present(self) -> None:
+        """claude.ai may be unreachable from the user's network while the npm
+        registry is not, so a present npm wins over the official installer."""
+        claude = next(row for row in clients.definitions() if row.id == "claude-code")
+        with patch.object(clients, "_on_path", return_value=[r"C:\nodejs\npm.cmd"]):
+            command, reason = clients.install_plan(claude)
+        self.assertIsNone(reason)
+        self.assertEqual(r"C:\nodejs\npm.cmd", command[0])
+        self.assertEqual("@anthropic-ai/claude-code", command[-1])
+
     def test_claude_code_on_windows_does_not_need_node(self) -> None:
         command = clients.claude_code_installer("nt")
         self.assertEqual("powershell", command[0])
