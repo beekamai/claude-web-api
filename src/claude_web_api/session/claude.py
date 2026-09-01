@@ -70,151 +70,283 @@ UUID_TEXT_RE = re.compile(
 
 SSE_TAP_SCRIPT = r"""
 (() => {
-  if (globalThis.__openclaudeFetchTapped) return;
-  globalThis.__openclaudeFetchTapped = true;
-  const nativeFetch = globalThis.fetch.bind(globalThis);
-  const completionPath =
-    /\/api\/organizations\/[^/]+\/chat_conversations\/[^/]+\/(?:completion2?|retry_completion2?)$/;
+  if (globalThis.__openclaudeTapInstalled) return;
 
-  async function emitFrame(frame, url) {
-    let event = "message";
-    const data = [];
-    for (const line of frame.split(/\r?\n/)) {
-      if (line.startsWith("event:")) event = line.slice(6).trim();
-      else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
-    }
-    if (data.length) {
-      await globalThis.__openclaude_sse({
-        url,
-        event,
-        data: data.join("\n")
-      });
-      return true;
-    }
-    return false;
-  }
+  // Camoufox runs automation scripts in a world isolated from the page, so a
+  // fetch patched here never sees the application's own requests. The tap is
+  // injected into the page world through a <script> element and reports back
+  // over a DOM event, which both worlds share. claude.ai's CSP forbids eval
+  // and new Function(), so the worker copy is serialised with toString()
+  // rather than assembled from source strings.
+  const EVENT_NAME = "__openclaude_sse_evt";
+  const CHANNEL_NAME = "__openclaude_sse_channel";
 
-  async function pump(response, url) {
-    const reader = response.body?.getReader();
-    if (!reader) return;
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let rawBody = "";
-    let byteCount = 0;
-    let chunkCount = 0;
-    let frameCount = 0;
+  const deliver = (payload) => {
+    if (!payload || typeof payload !== "object") return;
     try {
-      for (;;) {
-        const {done, value} = await reader.read();
-        if (done) break;
-        byteCount += value?.byteLength || 0;
-        chunkCount += 1;
-        if (chunkCount === 1) {
-          await globalThis.__openclaude_sse({
-            url,
-            event: "__tap_chunk",
-            data: JSON.stringify({byteCount, chunkCount})
-          });
+      void globalThis.__openclaude_sse(payload);
+    } catch {}
+  };
+
+  document.addEventListener(EVENT_NAME, (event) => {
+    try {
+      deliver(JSON.parse(String(event.detail)));
+    } catch {}
+  });
+
+  try {
+    const inbound = new BroadcastChannel(CHANNEL_NAME);
+    inbound.onmessage = (event) => deliver(event.data);
+  } catch {}
+
+  const PAGE_SOURCE = String.raw`
+(() => {
+  if (window.__openclaudeFetchTapped) return;
+  window.__openclaudeFetchTapped = true;
+
+  var EVENT_NAME = "__openclaude_sse_evt";
+  var CHANNEL_NAME = "__openclaude_sse_channel";
+
+  function installTap(emit, baseHref) {
+    var COMPLETION_RE = new RegExp(
+      "/api/organizations/[^/]+/chat_conversations/[^/]+/" +
+        "(?:completion2?|retry_completion2?)$"
+    );
+    var nativeFetch = globalThis.fetch.bind(globalThis);
+
+    async function emitFrame(frame, url) {
+      var event = "message";
+      var data = [];
+      var lines = frame.split(/\r?\n/);
+      for (var i = 0; i < lines.length; i += 1) {
+        var line = lines[i];
+        if (line.indexOf("event:") === 0) event = line.slice(6).trim();
+        else if (line.indexOf("data:") === 0) {
+          data.push(line.slice(5).replace(/^ /, ""));
         }
-        const decoded = decoder.decode(value, {stream: true});
-        buffer += decoded;
-        if (rawBody.length < 8192) {
-          rawBody += decoded.slice(0, 8192 - rawBody.length);
-        }
+      }
+      if (data.length) {
+        await emit({url: url, event: event, data: data.join("\n")});
+        return true;
+      }
+      return false;
+    }
+
+    async function pump(response, url) {
+      var body = response.body;
+      if (!body) return;
+      var reader = body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+      var rawBody = "";
+      var byteCount = 0;
+      var chunkCount = 0;
+      var frameCount = 0;
+      try {
         for (;;) {
-          const match = /\r?\n\r?\n/.exec(buffer);
-          if (!match) break;
-          const frame = buffer.slice(0, match.index);
-          buffer = buffer.slice(match.index + match[0].length);
-          if (frame && await emitFrame(frame, url)) frameCount += 1;
+          var step = await reader.read();
+          if (step.done) break;
+          byteCount += (step.value && step.value.byteLength) || 0;
+          chunkCount += 1;
+          if (chunkCount === 1) {
+            await emit({
+              url: url,
+              event: "__tap_chunk",
+              data: JSON.stringify({
+                byteCount: byteCount,
+                chunkCount: chunkCount
+              })
+            });
+          }
+          var decoded = decoder.decode(step.value, {stream: true});
+          buffer += decoded;
+          if (rawBody.length < 8192) {
+            rawBody += decoded.slice(0, 8192 - rawBody.length);
+          }
+          for (;;) {
+            var match = /\r?\n\r?\n/.exec(buffer);
+            if (!match) break;
+            var frame = buffer.slice(0, match.index);
+            buffer = buffer.slice(match.index + match[0].length);
+            if (frame && await emitFrame(frame, url)) frameCount += 1;
+          }
         }
-      }
-      const trailing = decoder.decode();
-      buffer += trailing;
-      if (rawBody.length < 8192) {
-        rawBody += trailing.slice(0, 8192 - rawBody.length);
-      }
-      if (buffer.trim() && await emitFrame(buffer, url)) frameCount += 1;
-      if (frameCount === 0) {
-        let message = "";
-        const contentType = response.headers.get("content-type") || "";
-        if (/json/i.test(contentType)) {
-          try {
-            const parsed = JSON.parse(rawBody);
-            const error = parsed?.error;
-            message =
-              (typeof error === "string" && error) ||
-              error?.message ||
-              parsed?.message ||
-              parsed?.detail ||
-              "";
-          } catch {}
+        var trailing = decoder.decode();
+        buffer += trailing;
+        if (rawBody.length < 8192) {
+          rawBody += trailing.slice(0, 8192 - rawBody.length);
         }
-        await globalThis.__openclaude_sse({
-          url,
-          event: "__tap_http_error",
-          data: JSON.stringify({
-            status: response.status,
-            message: String(
-              message || `completion returned no SSE frames (${contentType || "unknown content type"})`
-            ).slice(0, 1000)
-          })
-        });
-      }
-      await globalThis.__openclaude_sse({
-        url,
-        event: "__tap_eof",
-        data: JSON.stringify({
-          byteCount,
-          chunkCount,
-          frameCount,
-          trailingChars: buffer.length
-        })
-      });
-    } catch (error) {
-      await globalThis.__openclaude_sse({
-        url,
-        event: "__tap_error",
-        data: String(error)
-      }).catch(() => {});
-    }
-  }
-
-  globalThis.fetch = async (...args) => {
-    const response = await nativeFetch(...args);
-    try {
-      const input = args[0];
-      const raw =
-        typeof input === "string" || input instanceof URL
-          ? String(input)
-          : input.url;
-      const url = new URL(raw, location.href);
-      if (completionPath.test(url.pathname)) {
-        await globalThis.__openclaude_sse({
-          url: url.href,
-          event: "__tap_seen",
-          data: JSON.stringify({
-            status: response.status,
-            contentType: response.headers.get("content-type"),
-            hasBody: Boolean(response.body)
-          })
-        });
-        if (response.body) {
-          void pump(response.clone(), url.href);
-        } else {
-          await globalThis.__openclaude_sse({
-            url: url.href,
+        if (buffer.trim() && await emitFrame(buffer, url)) frameCount += 1;
+        if (frameCount === 0) {
+          var message = "";
+          var contentType = response.headers.get("content-type") || "";
+          if (/json/i.test(contentType)) {
+            try {
+              var parsed = JSON.parse(rawBody);
+              var error = parsed && parsed.error;
+              message =
+                (typeof error === "string" && error) ||
+                (error && error.message) ||
+                (parsed && parsed.message) ||
+                (parsed && parsed.detail) ||
+                "";
+            } catch (e) {}
+          }
+          await emit({
+            url: url,
             event: "__tap_http_error",
             data: JSON.stringify({
               status: response.status,
-              message: "completion returned an empty response body"
+              message: String(
+                message ||
+                  "completion returned no SSE frames (" +
+                    (contentType || "unknown content type") + ")"
+              ).slice(0, 1000)
             })
           });
         }
+        await emit({
+          url: url,
+          event: "__tap_eof",
+          data: JSON.stringify({
+            byteCount: byteCount,
+            chunkCount: chunkCount,
+            frameCount: frameCount,
+            trailingChars: buffer.length
+          })
+        });
+      } catch (error) {
+        try {
+          await emit({url: url, event: "__tap_error", data: String(error)});
+        } catch (e) {}
       }
-    } catch {}
-    return response;
+    }
+
+    globalThis.fetch = async function () {
+      var args = Array.prototype.slice.call(arguments);
+      var response = await nativeFetch.apply(null, args);
+      try {
+        var input = args[0];
+        var raw =
+          typeof input === "string" || input instanceof URL
+            ? String(input)
+            : input.url;
+        var url = new URL(raw, baseHref);
+        if (COMPLETION_RE.test(url.pathname)) {
+          await emit({
+            url: url.href,
+            event: "__tap_seen",
+            data: JSON.stringify({
+              status: response.status,
+              contentType: response.headers.get("content-type"),
+              hasBody: Boolean(response.body)
+            })
+          });
+          if (response.body) {
+            void pump(response.clone(), url.href);
+          } else {
+            await emit({
+              url: url.href,
+              event: "__tap_http_error",
+              data: JSON.stringify({
+                status: response.status,
+                message: "completion returned an empty response body"
+              })
+            });
+          }
+        }
+      } catch (e) {}
+      return response;
+    };
+  }
+
+  var emit = function (payload) {
+    try {
+      document.dispatchEvent(
+        new CustomEvent(EVENT_NAME, {detail: JSON.stringify(payload)})
+      );
+    } catch (e) {}
+    return Promise.resolve();
   };
+
+  try {
+    installTap(emit, location.href);
+    emit({url: location.href, event: "__tap_ready", data: "page-world"});
+  } catch (e) {
+    emit({url: location.href, event: "__tap_error", data: "install " + e});
+  }
+
+  var NativeWorker = window.Worker;
+  if (typeof NativeWorker === "function") {
+    window.__openclaudeWorkerCount = 0;
+    var workerSource =
+      "var __ch = new BroadcastChannel(" + JSON.stringify(CHANNEL_NAME) + ");" +
+      "var __emit = function (payload) {" +
+      "  __ch.postMessage(payload); return Promise.resolve(); };" +
+      "(" + installTap.toString() + ")(__emit, " +
+      JSON.stringify(location.origin) + ");";
+    var loaderFor = function (scriptUrl, isModule) {
+      var tail = isModule
+        ? "import(" + JSON.stringify(scriptUrl) + ");"
+        : "importScripts(" + JSON.stringify(scriptUrl) + ");";
+      return URL.createObjectURL(
+        new Blob(["try {" + workerSource + "} catch (e) {}" + tail],
+          {type: "text/javascript"})
+      );
+    };
+    var PatchedWorker = function (scriptUrl, options) {
+      window.__openclaudeWorkerCount += 1;
+      var target = scriptUrl;
+      try {
+        var isModule = Boolean(options && options.type === "module");
+        target = loaderFor(
+          new URL(String(scriptUrl), location.href).href,
+          isModule
+        );
+      } catch (e) {
+        target = scriptUrl;
+      }
+      return new NativeWorker(target, options);
+    };
+    PatchedWorker.prototype = NativeWorker.prototype;
+    window.Worker = PatchedWorker;
+    emit({
+      url: location.href,
+      event: "__tap_ready",
+      data: "worker-patch"
+    });
+  }
+})();
+`;
+
+  const inject = () => {
+    try {
+      const host = document.documentElement || document.head || document.body;
+      if (!host) return false;
+      const element = document.createElement("script");
+      element.textContent = PAGE_SOURCE;
+      host.appendChild(element);
+      element.remove();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // The flag is set only once the page world actually received the tap: at
+  // document_start there may be no element to attach to yet, and the bridge
+  // re-evaluates this script before every turn.
+  if (inject()) {
+    globalThis.__openclaudeTapInstalled = true;
+  } else {
+    document.addEventListener(
+      "readystatechange",
+      () => {
+        if (inject()) globalThis.__openclaudeTapInstalled = true;
+      },
+      {once: true}
+    );
+  }
 })();
 """
 

@@ -97,6 +97,20 @@ left a decorator behind and silently re-bound `/api/control/state` to `main()`.
 
 ## Things that will bite you
 
+- **The stream tap must live in the page world.** Camoufox runs automation
+  scripts in a world isolated from the page, so patching `fetch` from an init
+  script has no effect on the application's own requests — the patch and the
+  page each see their own globals. `SSE_TAP_SCRIPT` therefore injects itself
+  into the page through a `<script>` element and reports back over a DOM
+  event, which both worlds share. Symptom when this breaks: the turn is
+  submitted, claude.ai answers in the browser, and the bridge waits until the
+  watchdog restarts it, with `native.tap.event_count` stuck at zero.
+- **claude.ai's CSP forbids `eval` and `new Function()`.** The worker copy of
+  the tap is serialised with `Function.prototype.toString()` for that reason.
+  A CSP violation surfaces as a `__tap_error` frame, not as a thrown error.
+- **`_receive_sse` drops everything while no turn is active**, and does not
+  count those events. Debug frames emitted at install time are therefore
+  invisible; log inside `_receive_sse` itself when diagnosing the tap.
 - `session/claude.py` is ~4900 lines with a 90-method `ClaudeSession`. It embeds
   browser-side JavaScript in string literals — that is why the file is exempt
   from `E501` in `pyproject.toml`. Reflowing those literals changes the code
