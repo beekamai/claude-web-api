@@ -74,6 +74,12 @@ the Camoufox browser. Nothing is installed system-wide.
 .\scripts\start.ps1
 ```
 
+If PowerShell refuses to run scripts ("execution of scripts is disabled on this
+system"), double-click `start.cmd` instead — it runs the same script with
+`-ExecutionPolicy Bypass` for that one process — or allow scripts for your user
+once: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. `setup.cmd` does
+the same for the manual setup.
+
 The first run opens a visible browser — log into `claude.ai` there. The session
 is stored in `profile\`, and the main runtime goes headless afterwards.
 
@@ -219,6 +225,13 @@ cd claude-web-api
 ```powershell
 .\scripts\start.ps1
 ```
+
+Если PowerShell отказывается запускать скрипты («выполнение сценариев
+отключено в этой системе»), запустите `start.cmd` двойным кликом — он
+выполнит тот же скрипт с `-ExecutionPolicy Bypass` только для этого процесса —
+либо один раз разрешите скрипты для своего пользователя:
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. Для ручной установки
+есть `setup.cmd`.
 
 При первом запуске откроется видимый браузер — войдите там в `claude.ai`.
 Сессия сохранится в `profile\`, дальше рантайм работает headless.
