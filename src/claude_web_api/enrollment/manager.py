@@ -16,6 +16,7 @@ from camoufox.async_api import AsyncCamoufox
 from playwright.async_api import async_playwright
 
 from claude_web_api.control import proxy_relay
+from claude_web_api.session.scripts import ENSURE_PROJECT_SCRIPT
 
 MODEL_ID_RE = re.compile(
     r"claude-(?:opus|sonnet|haiku)-[a-z0-9][a-z0-9._-]*",
@@ -1267,112 +1268,7 @@ class ProfileEnrollmentManager:
                 )
             result = await asyncio.wait_for(
                 enrollment.page.evaluate(
-                    """
-                    async ({organizationUuid, instructions}) => {
-                      const base = `/api/organizations/${organizationUuid}/projects`;
-                      const bridgeDescription =
-                        'Dedicated workspace for the local OpenClaude IDE bridge.';
-                      const request = async (url, options = {}) => {
-                        const response = await fetch(url, {
-                          credentials: 'include',
-                          cache: 'no-store',
-                          headers: {
-                            Accept: 'application/json',
-                            'Content-Type': 'application/json',
-                            ...(options.headers || {})
-                          },
-                          ...options
-                        });
-                        const text = await response.text();
-                        let body = null;
-                        try { body = text ? JSON.parse(text) : null; } catch {}
-                        if (!response.ok) {
-                          throw new Error(
-                            `${options.method || 'GET'} ${url} -> `
-                            + `${response.status}: ${text.slice(0, 300)}`
-                          );
-                        }
-                        return body;
-                      };
-                      const listed = await request(base);
-                      const candidates = [];
-                      const walk = (value, depth = 0) => {
-                        if (!value || depth > 7) return;
-                        if (Array.isArray(value)) {
-                          for (const child of value) walk(child, depth + 1);
-                          return;
-                        }
-                        if (typeof value !== 'object') return;
-                        const id = String(value.uuid || value.id || '');
-                        if (
-                          id
-                          && value.name === 'OpenClaude IDE'
-                          && value.description === bridgeDescription
-                          && value.is_private !== false
-                        ) {
-                          candidates.push(value);
-                        }
-                        for (const child of Object.values(value)) {
-                          walk(child, depth + 1);
-                        }
-                      };
-                      walk(listed);
-                      let project = candidates[0] || null;
-                      let created = false;
-                      if (!project) {
-                        project = await request(base, {
-                          method: 'POST',
-                          body: JSON.stringify({
-                            name: 'OpenClaude IDE',
-                            description: bridgeDescription,
-                            is_private: true,
-                            prompt_template: instructions
-                          })
-                        });
-                        created = true;
-                      }
-                      const projectId = String(project?.uuid || project?.id || '');
-                      if (!projectId) throw new Error(
-                        'Claude Project response did not include an id'
-                      );
-                      const verified = await request(`${base}/${projectId}`);
-                      const promptTemplate = String(
-                        verified?.prompt_template || ''
-                      );
-                      const legacyPrefix =
-                        `${instructions}\\n\\n`
-                        + 'DYNAMIC_OPENCLAUDE_SYSTEM_CONTEXT\\n';
-                      const legacyDynamicPrompt =
-                        promptTemplate.startsWith(legacyPrefix)
-                        && promptTemplate.length > legacyPrefix.length;
-                      if (
-                        promptTemplate !== instructions
-                        && !legacyDynamicPrompt
-                      ) {
-                        throw new Error(
-                          'Existing OpenClaude IDE Project instructions were '
-                          + 'edited externally; the edit was preserved'
-                        );
-                      }
-                      if (
-                        !created
-                        && (
-                          legacyDynamicPrompt
-                          || verified?.is_private !== true
-                        )
-                      ) {
-                        await request(`${base}/${projectId}`, {
-                          method: 'PUT',
-                          body: JSON.stringify({
-                            prompt_template: instructions,
-                            is_private: true
-                          })
-                        });
-                      }
-                      await request(`${base}/${projectId}/permissions`);
-                      return {projectId};
-                    }
-                    """,
+                    ENSURE_PROJECT_SCRIPT,
                     {
                         "organizationUuid": enrollment.organization_uuid,
                         "instructions": instructions,

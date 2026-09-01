@@ -313,6 +313,11 @@ def persist_runtime_identity() -> bool:
     organization_uuid = session.organization_uuid_for_internal_use()
     if organization_uuid:
         updates["organization_id"] = organization_uuid
+    # The session creates the Project itself when a profile arrives without
+    # one; the id it adopted must outlive the process.
+    project_id = str(session.current_profile_spec().get("project_id") or "")
+    if project_id and project_id != str(existing.get("project_id") or ""):
+        updates["project_id"] = project_id
     if account.get("authenticated"):
         project = health.get("project")
         updates["status"] = (

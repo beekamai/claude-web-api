@@ -16,11 +16,48 @@ from claude_web_api.session.patterns import (
     KNOWN_OPENCLAUDE_PROJECT_PROMPT_SHA256,
     LEGACY_DYNAMIC_PROJECT_PROMPT_MARKER,
 )
+from claude_web_api.session.scripts import ENSURE_PROJECT_SCRIPT
 from claude_web_api.session.state import SessionState
 
 
 class TrustedProjectMixin(SessionState):
     """The account-owned Claude Project that carries the bridge contract."""
+
+    async def _create_trusted_project(self) -> str | None:
+        """Find or create the account's bridge Project and adopt it."""
+        if not self._organization_uuid:
+            self._project_instructions_synced = False
+            self._project_sync_error = (
+                "the active profile has no Claude Project and the "
+                "organization is not known yet"
+            )
+            return None
+        try:
+            result = await asyncio.wait_for(
+                self.page.evaluate(
+                    ENSURE_PROJECT_SCRIPT,
+                    {
+                        "organizationUuid": self._organization_uuid,
+                        "instructions": self._project_instructions,
+                    },
+                ),
+                timeout=45,
+            )
+        except Exception as exc:
+            self._project_instructions_synced = False
+            self._project_sync_error = (
+                f"Claude Project could not be created: {exc}"
+            )
+            return None
+        project_id = str(
+            (result or {}).get("projectId") if isinstance(result, dict) else ""
+        ).strip()
+        if not project_id:
+            self._project_instructions_synced = False
+            self._project_sync_error = "Claude Project setup returned no id"
+            return None
+        self.profile_specs[self.profile_index]["project_id"] = project_id
+        return project_id
 
     async def _sync_trusted_project(self) -> bool:
         """Verify the account-owned Project and sync its trusted instructions."""
@@ -29,11 +66,14 @@ class TrustedProjectMixin(SessionState):
         spec = self.current_profile_spec()
         project_id = str(spec.get("project_id") or "").strip()
         if not project_id:
-            self._project_instructions_synced = False
-            self._project_sync_error = (
-                "the active profile has no Claude Project"
-            )
-            return False
+            # A profile can reach a running session without a Project: an
+            # older enrollment failed at that step, or the config was lost
+            # and the login re-done. Create it here rather than parking the
+            # session in project_unavailable until someone re-enrolls.
+            created = await self._create_trusted_project()
+            if not created:
+                return False
+            project_id = created
         try:
             result = await asyncio.wait_for(
                 self.page.evaluate(

@@ -434,6 +434,61 @@ class ProtocolRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(native_session._project_instructions_synced)
         self.assertIn("external edit was preserved", native_session._project_sync_error)
 
+    async def test_a_profile_without_a_project_creates_one_instead_of_stalling(
+        self,
+    ) -> None:
+        """A lost config or an enrollment that failed at the Project step used
+        to park the session in project_unavailable until someone re-enrolled."""
+        organization_id = "44444444-4444-4444-4444-444444444444"
+        created_id = "55555555-5555-5555-5555-555555555555"
+        native_session = ClaudeSession(
+            headless=True,
+            profiles=[
+                {
+                    "id": "default",
+                    "path": str(Path.cwd() / "profile"),
+                    "project_id": None,
+                    "organization_id": organization_id,
+                }
+            ],
+            project_instructions="trusted IDE contract",
+        )
+        native_session._organization_uuid = organization_id
+
+        async def evaluate(script, arguments=None):
+            if "OpenClaude IDE" in script and "projectId" not in (arguments or {}):
+                return {"projectId": created_id}
+            return {
+                "ok": True,
+                "organizationUuid": organization_id,
+                "promptTemplate": "trusted IDE contract",
+                "privacyVerified": True,
+            }
+
+        native_session.page = SimpleNamespace(evaluate=AsyncMock(side_effect=evaluate))
+        self.assertTrue(await native_session._sync_trusted_project())
+        self.assertEqual(created_id, native_session.current_profile_spec()["project_id"])
+        self.assertTrue(native_session._project_instructions_synced)
+
+    async def test_a_profile_without_a_project_or_organization_reports_why(
+        self,
+    ) -> None:
+        native_session = ClaudeSession(
+            headless=True,
+            profiles=[
+                {
+                    "id": "default",
+                    "path": str(Path.cwd() / "profile"),
+                    "project_id": None,
+                }
+            ],
+            project_instructions="trusted IDE contract",
+        )
+        native_session.page = SimpleNamespace(evaluate=AsyncMock())
+        self.assertFalse(await native_session._sync_trusted_project())
+        self.assertIn("organization is not known", native_session._project_sync_error)
+        native_session.page.evaluate.assert_not_awaited()
+
     async def test_project_repair_preserves_edit_made_after_sync_read(self) -> None:
         project_id = "33333333-3333-3333-3333-333333333333"
         native_session = ClaudeSession(
