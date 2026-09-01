@@ -130,7 +130,9 @@ class InstallPlanTests(unittest.TestCase):
         self.assertEqual("powershell", command[0])
         self.assertEqual("-EncodedCommand", command[-2])
         script = base64.b64decode(command[-1]).decode("utf-16-le")
-        self.assertIn("irm https://claude.ai/install.ps1 | iex", script)
+        self.assertIn("irm https://claude.ai/install.ps1", script)
+        self.assertIn("Invoke-Expression -Command $script", script)
+        self.assertIn("StartsWith('param(')", script)
         self.assertEqual("npm", clients.claude_code_installer("posix")[0])
 
 
