@@ -4,7 +4,14 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $projectRoot
 $py = Join-Path $projectRoot ".python\python.exe"
 if (-not (Test-Path $py)) {
-    Write-Error "Portable Python missing. Re-run setup."
+    $hint = "Portable Python is missing in $projectRoot. Run setup.cmd here"
+    $installed = Join-Path $env:SystemDrive "claude-web-api"
+    if (($installed -ne $projectRoot) -and (Test-Path (Join-Path $installed ".python\python.exe"))) {
+        # The installer defaults to this directory, so a copy unpacked
+        # elsewhere is usually a second, unprovisioned checkout.
+        $hint += ", or start the installed copy: $installed\start.cmd"
+    }
+    Write-Error "$hint."
     exit 1
 }
 $browserVersion = & $py -c "from camoufox.pkgman import installed_verstr; print(installed_verstr())" 2>$null

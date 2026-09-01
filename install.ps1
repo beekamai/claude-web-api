@@ -16,6 +16,12 @@ function Test-AsciiPath($path) { return ($path -notmatch '[^\x00-\x7F]') }
 # non-ASCII directory (a Cyrillic user name gives a Cyrillic home), so such
 # homes fall back to the system drive root.
 $defaultDir = if (Test-AsciiPath $HOME) { Join-Path $HOME "claude-web-api" } else { Join-Path $env:SystemDrive "claude-web-api" }
+# Run from inside an unpacked copy of the repository, install right there:
+# otherwise the user ends up with a working copy in one place and the
+# scripts they keep launching in another.
+if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "pyproject.toml")) -and (Test-AsciiPath $PSScriptRoot)) {
+    $defaultDir = $PSScriptRoot
+}
 $target = if ($env:CLAUDE_WEB_API_DIR) { $env:CLAUDE_WEB_API_DIR } else { $defaultDir }
 if (-not (Test-AsciiPath $target)) {
     throw "The install path '$target' contains non-ASCII characters; set `$env:CLAUDE_WEB_API_DIR to a plain-ASCII path such as C:\claude-web-api."
@@ -58,6 +64,8 @@ if (Test-Path (Join-Path $target ".git")) {
     } finally { Pop-Location }
 } elseif ($git -and -not (Test-Path $target)) {
     & git clone --depth 1 --branch $branch "https://github.com/$repo" $target
+} elseif (Test-Path (Join-Path $target "pyproject.toml")) {
+    Note "Using the unpacked copy already in $target (no git metadata, so it is not updated)."
 } else {
     # No git, or a directory that is not a checkout: fall back to the archive.
     $archive = Join-Path $staging "claude-web-api-$branch.zip"
