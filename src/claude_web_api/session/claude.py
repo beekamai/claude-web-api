@@ -239,6 +239,7 @@ class ClaudeSession(
             ),
         )
         self._driver_pid: int | None = None
+        self._proxy_relay: Any = None
         self._tool_result_delivery: dict[str, str] = {}
         self._watchdog_interval = max(
             2.0, float(os.getenv("CLAUDE_WATCHDOG_INTERVAL", "10"))

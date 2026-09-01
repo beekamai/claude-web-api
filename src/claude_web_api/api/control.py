@@ -421,7 +421,7 @@ async def launch_profile_login(profile_id: str):
             profile_id,
             profile["path"],
             str(profile.get("provider") or CLAUDE_WEB_PROVIDER_ID),
-            proxy_settings.launch_options(profile.get("proxy")),
+            profile.get("proxy"),
         )
         runtime.control.update_profile(profile_id, {"status": "auth_pending"})
         if profile.get("provider") == runtime.GROK_WEB_PROVIDER_ID:

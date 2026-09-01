@@ -12,7 +12,7 @@ from typing import Any
 
 from camoufox.async_api import AsyncCamoufox
 
-from claude_web_api.control import proxy as proxy_settings
+from claude_web_api.control import proxy_relay
 from claude_web_api.session.errors import ClaudeBrowserUnavailableError
 from claude_web_api.session.patterns import (
     COMPLETION_PATH_RE,
@@ -74,8 +74,9 @@ class BrowserLifecycleMixin(SessionState):
             # serializes True, which the browser rejects as non-double.
             "humanize": self._humanize_seconds or False,
         }
-        outbound = proxy_settings.launch_options(
-            self.profile_specs[self.profile_index].get("proxy")
+        outbound = proxy_relay.browser_proxy(
+            self.profile_specs[self.profile_index].get("proxy"),
+            self._proxy_relay,
         )
         if outbound:
             # geoip lets Camoufox derive locale, timezone and WebRTC address
@@ -106,6 +107,12 @@ class BrowserLifecycleMixin(SessionState):
         profile_dir = self.profile_dirs[self.profile_index]
         profile_dir.mkdir(parents=True, exist_ok=True)
         try:
+            # Firefox cannot authenticate to a SOCKS5 proxy itself, so an
+            # authenticated one is fronted by a loopback relay for the
+            # lifetime of this browser.
+            self._proxy_relay = await proxy_relay.open_relay(
+                self.profile_specs[self.profile_index].get("proxy")
+            )
             self._camoufox = AsyncCamoufox(**self.launch_options(profile_dir))
             self._context = await asyncio.wait_for(
                 self._camoufox.__aenter__(),
@@ -276,6 +283,9 @@ class BrowserLifecycleMixin(SessionState):
                 except Exception:
                     await self._kill_driver_tree(driver_pid)
         finally:
+            relay, self._proxy_relay = self._proxy_relay, None
+            if relay is not None:
+                await relay.stop()
             self.ready = False
             self._browser_dead.clear()
             self._stopping = False

@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from claude_web_api.control import proxy
+from claude_web_api.control import proxy, proxy_relay
 from claude_web_api.control.config import ControlConfig
 from claude_web_api.sanitize import public_error_message
 from claude_web_api.session.browser import BrowserLifecycleMixin
@@ -180,6 +180,7 @@ class LaunchTests(unittest.TestCase):
         session._humanize_seconds = 0.0
         session.profile_specs = [spec]
         session.profile_index = 0
+        session._proxy_relay = None
         return session
 
     def test_an_enabled_proxy_reaches_camoufox_with_geoip(self) -> None:
@@ -197,6 +198,28 @@ class LaunchTests(unittest.TestCase):
         options = session.launch_options(Path("profile"))
         self.assertEqual("socks5://p.io:1080", options["proxy"]["server"])
         self.assertEqual(PASSWORD, options["proxy"]["password"])
+        self.assertTrue(options["geoip"])
+
+    def test_an_authenticated_socks5_proxy_is_fronted_by_the_relay(self) -> None:
+        """Firefox refuses SOCKS5 credentials, so the browser must be handed
+        the loopback relay, never the real proxy with its password."""
+        session = self.session(
+            {
+                "id": "second",
+                "proxy": {
+                    "enabled": True,
+                    "server": "socks5://p.io:1080",
+                    "username": "mara",
+                    "password": PASSWORD,
+                },
+            }
+        )
+        relay = proxy_relay.Socks5Relay(session.profile_specs[0]["proxy"])
+        relay.listen_port = 45678
+        session._proxy_relay = relay
+        options = session.launch_options(Path("profile"))
+        self.assertEqual({"server": "socks5://127.0.0.1:45678"}, options["proxy"])
+        self.assertNotIn(PASSWORD, repr(options))
         self.assertTrue(options["geoip"])
 
     def test_a_profile_without_a_proxy_launches_unchanged(self) -> None:
@@ -300,6 +323,48 @@ class HandshakeTests(unittest.IsolatedAsyncioTestCase):
         host, port = await server.start()
         self.addAsyncCleanup(server.stop)
         await self.connect(host, port, "", "")
+
+    async def test_the_relay_authenticates_on_the_browsers_behalf(self) -> None:
+        """The browser speaks plain SOCKS5 to the relay; the relay presents
+        the credentials to the real proxy and forwards the CONNECT reply."""
+        upstream = FakeSocks5Server(password=PASSWORD)
+        host, port = await upstream.start()
+        self.addAsyncCleanup(upstream.stop)
+        relay = await proxy_relay.open_relay(
+            {
+                "enabled": True,
+                "server": f"socks5://{host}:{port}",
+                "username": "mara",
+                "password": PASSWORD,
+            }
+        )
+        assert relay is not None
+        self.addAsyncCleanup(relay.stop)
+
+        reader, writer = await asyncio.open_connection("127.0.0.1", relay.listen_port)
+        try:
+            writer.write(b"\x05\x01\x00")
+            await writer.drain()
+            self.assertEqual(b"\x05\x00", await reader.readexactly(2))
+            writer.write(b"\x05\x01\x00\x03" + bytes([9]) + b"claude.ai" + (443).to_bytes(2, "big"))
+            await writer.drain()
+            reply = await reader.readexactly(10)
+        finally:
+            writer.close()
+        self.assertEqual(0, reply[1])
+        self.assertEqual(("mara", PASSWORD), upstream.seen)
+
+    async def test_only_an_authenticated_socks5_proxy_gets_a_relay(self) -> None:
+        self.assertIsNone(
+            await proxy_relay.open_relay(
+                {"enabled": True, "server": "socks5://p.io:1080"}
+            )
+        )
+        self.assertIsNone(
+            await proxy_relay.open_relay(
+                {"enabled": True, "server": "http://p.io:8080", "username": "m"}
+            )
+        )
 
     async def test_http_connect_sends_basic_authorization(self) -> None:
         seen: list[bytes] = []

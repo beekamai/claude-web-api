@@ -15,6 +15,8 @@ from urllib.parse import urlsplit, urlunsplit
 from camoufox.async_api import AsyncCamoufox
 from playwright.async_api import async_playwright
 
+from claude_web_api.control import proxy_relay
+
 MODEL_ID_RE = re.compile(
     r"claude-(?:opus|sonnet|haiku)-[a-z0-9][a-z0-9._-]*",
     re.I,
@@ -291,6 +293,7 @@ class Enrollment:
     organization_uuid: str | None = None
     project_id: str | None = None
     browser_engine: str = "camoufox"
+    relay: Any = None
 
 
 class ProfileEnrollmentManager:
@@ -341,12 +344,14 @@ class ProfileEnrollmentManager:
 
             path = Path(profile_path).expanduser().resolve()
             path.mkdir(parents=True, exist_ok=True)
+            relay = await proxy_relay.open_relay(outbound_proxy)
+            browser_proxy = proxy_relay.browser_proxy(outbound_proxy, relay)
             if provider == GROK_WEB_PROVIDER:
                 # xAI currently rejects the Camoufox/Firefox enrollment
                 # window. Keep auth inside an installed Chrome process with a
                 # dedicated persistent profile; no session material leaves it.
                 camoufox: _ChromeEnrollmentBrowser | AsyncCamoufox = (
-                    _ChromeEnrollmentBrowser(path, outbound_proxy)
+                    _ChromeEnrollmentBrowser(path, browser_proxy)
                 )
                 browser_engine = "chrome"
             else:
@@ -360,8 +365,8 @@ class ProfileEnrollmentManager:
                     "user_data_dir": str(path),
                     "humanize": self._humanize_seconds or False,
                 }
-                if outbound_proxy:
-                    launch["proxy"] = outbound_proxy
+                if browser_proxy:
+                    launch["proxy"] = browser_proxy
                     launch["geoip"] = True
                 camoufox = AsyncCamoufox(**launch)
                 browser_engine = "camoufox"
@@ -381,6 +386,7 @@ class ProfileEnrollmentManager:
                     timeout=120_000,
                 )
                 enrollment = Enrollment(
+                    relay=relay,
                     profile_id=profile_id,
                     profile_path=path,
                     provider=provider,
@@ -1420,6 +1426,8 @@ class ProfileEnrollmentManager:
         enrollment = self._enrollments.pop(profile_id, None)
         if enrollment is None:
             return
+        if enrollment.relay is not None:
+            await enrollment.relay.stop()
         try:
             await asyncio.wait_for(
                 enrollment.camoufox.__aexit__(None, None, None),

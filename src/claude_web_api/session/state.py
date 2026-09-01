@@ -29,6 +29,7 @@ class SessionState:
     _conversation_client_session_id: str | None
     _conversation_privacy_mode: str | None
     _driver_pid: int | None
+    _proxy_relay: Any
     _history_recovery_required: Any
     _fresh_chat_required: bool
     _humanize_seconds: Any
