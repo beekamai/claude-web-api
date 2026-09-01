@@ -604,6 +604,11 @@ textarea:focus-visible,
   font-size: 13px;
 }
 
+/* "Автоматически" is the default value and was clipped to "Автоматич". */
+#overview-model {
+  min-width: 168px;
+}
+
 .overview-grid {
   display: grid;
   min-width: 0;
@@ -765,7 +770,9 @@ textarea:focus-visible,
   position: relative;
   min-width: 0;
   flex: 1;
-  min-height: 250px;
+  /* Idle is the common case, so the panel only claims the room it needs;
+     a live generation expands it. */
+  min-height: 96px;
   margin: 12px;
   overflow: auto;
   border: 1px solid var(--line-strong);
@@ -1778,6 +1785,15 @@ textarea:focus-visible,
   overflow: hidden;
 }
 
+.response-body.is-streaming {
+  min-height: 250px;
+}
+
+/* One bar inside a 260px frame reads as a broken chart, not a quiet day. */
+.trend-chart--sparse {
+  height: 140px;
+}
+
 .trend-chart {
   display: flex;
   height: 260px;
@@ -2645,4 +2661,41 @@ textarea:focus-visible,
 
 .is-overridden .switch {
   pointer-events: none;
+}
+
+/* The overview's response panel when nothing is generating: it reports the
+   turn that just finished instead of holding empty space. */
+.last-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+}
+
+.last-turn-headline {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.last-turn-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.last-turn-facts dt {
+  color: var(--muted);
+}
+
+.last-turn-facts dd {
+  margin: 0;
+  color: var(--ink);
+}
+
+.last-turn-note {
+  font-size: 12px;
+  color: var(--muted);
 }

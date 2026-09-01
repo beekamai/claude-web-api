@@ -631,18 +631,57 @@
     meta.replaceChildren();
 
     const text = response?.text ?? response?.content ?? response?.output ?? "";
+    body.classList.toggle("is-streaming", Boolean(response));
     if (!response) {
-      body.append(
-        node("div", { className: "empty-state" }, [
-          node("p", { text: "Нет активной генерации" }),
-          node("span", {
-            text: "Здесь появится поток ответа, если backend передаёт состояние генерации.",
-          }),
-        ]),
-      );
+      // Idle is the normal state — a turn lasts seconds. Rather than hold a
+      // third of the overview to say nothing is happening, report the turn
+      // that just finished.
+      const last = ui.state?.activity?.last;
+      const title = $("#current-response-title");
+      if (last) {
+        if (title) title.textContent = "Последний ответ";
+        body.append(
+          node("div", { className: "last-turn" }, [
+            node("p", { className: "last-turn-headline", text: [
+              formatTime(last.finished_at || last.started_at, true),
+              last.model || "Автоматически",
+            ].filter(Boolean).join(" · ") }),
+            node("dl", { className: "last-turn-facts" }, [
+              node("dt", { text: "Статус" }),
+              node("dd", {}, [requestStatusBadge(last.status)]),
+              node("dt", { text: "Длительность" }),
+              node("dd", { text: formatDuration(last.duration_seconds) }),
+              node("dt", { text: "Размер ответа" }),
+              node("dd", {
+                text: last.text_chars
+                  ? `${formatNumber(last.text_chars)} символов`
+                  : "—",
+              }),
+              node("dt", { text: "Вызовов инструментов" }),
+              node("dd", { text: formatNumber(last.tool_call_count || 0) }),
+            ]),
+            node("span", {
+              className: "last-turn-note",
+              text: "Поток ответа появится здесь во время генерации.",
+            }),
+          ]),
+        );
+      } else {
+        if (title) title.textContent = "Текущий ответ";
+        body.append(
+          node("div", { className: "empty-state" }, [
+            node("p", { text: "Запросов ещё не было" }),
+            node("span", {
+              text: "Здесь появится поток ответа, как только клиент обратится к мосту.",
+            }),
+          ]),
+        );
+      }
       meta.hidden = true;
       return;
     }
+    const streamingTitle = $("#current-response-title");
+    if (streamingTitle) streamingTitle.textContent = "Текущий ответ";
 
     if (text) {
       body.append(node("pre", { text }));
@@ -1452,6 +1491,8 @@
     const empty = $("#activity-series-empty");
     root.replaceChildren();
     empty.hidden = series.length > 0;
+    // Two bars stranded in a tall frame look like a rendering failure.
+    root.classList.toggle("trend-chart--sparse", series.length > 0 && series.length < 4);
     if (!series.length) return;
     const maxRequests = Math.max(...series.map((point) => point.requests || 0), 1);
     const period = $("#activity-period").value;
