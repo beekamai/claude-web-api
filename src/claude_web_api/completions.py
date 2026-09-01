@@ -22,6 +22,7 @@ from claude_web_api.protocol.openai import (
     ToolCall,
     actionable_input,
     attach_runtime_context,
+    carries_tool_results,
     client_runtime_context,
     has_semantic_user_after_pending_tools,
     history_text,
@@ -232,7 +233,17 @@ async def native_request(
         client_session_id
     )
     if pending_ids:
-        if has_semantic_user_after_pending_tools(body.messages, pending_ids):
+        # A client that asks for a fresh chat, or sends no tool result at all,
+        # is not going to answer the pending call — it interrupted the turn, or
+        # started over. Holding the browser hostage until the lease expires
+        # would fail every request in between, so the turn is abandoned here.
+        client_moved_on = (
+            _request_starts_fresh_chat(body, client_session_id)
+            or not carries_tool_results(body.messages)
+        )
+        if client_moved_on or has_semantic_user_after_pending_tools(
+            body.messages, pending_ids
+        ):
             recovery_required = await runtime.session.abandon_pending_native(
                 pending_ids,
                 client_session_id=client_session_id,

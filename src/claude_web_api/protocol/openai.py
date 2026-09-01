@@ -402,6 +402,11 @@ def has_semantic_user_after_pending_tools(
     )
 
 
+def carries_tool_results(messages: list[dict[str, Any]]) -> bool:
+    """Whether the request answers a tool call at all, anywhere in history."""
+    return any(message.get("role") == "tool" for message in messages)
+
+
 def trailing_tool_results(messages: list[dict[str, Any]]) -> list[ToolResult]:
     """Return the contiguous tool-result suffix in original message order."""
     results: list[ToolResult] = []
