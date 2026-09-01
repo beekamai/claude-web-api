@@ -75,7 +75,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             return await awaitable
 
         with patch(
-            "claude_web_api.session.claude.asyncio.wait_for",
+            "claude_web_api.session.identity.asyncio.wait_for",
             AsyncMock(side_effect=immediate),
         ):
             self.assertTrue(await native_session._load_account_identity())
