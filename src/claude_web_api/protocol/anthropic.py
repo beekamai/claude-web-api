@@ -105,13 +105,24 @@ def bridge_messages(body: MessagesIn) -> list[dict[str, Any]]:
     documents, raises instead of being dropped silently.
     """
     history: list[dict[str, Any]] = []
-    instructions = system_text(body.system)
-    if instructions:
-        history.append({"role": "system", "content": instructions})
+    instructions: list[str] = []
+    top_level = system_text(body.system)
+    if top_level:
+        instructions.append(top_level)
 
     for message in body.messages:
         role = message.get("role")
         content = message.get("content")
+        if role == "system":
+            # Operator instructions may also arrive mid-conversation, and
+            # Claude Code places one directly after a tool result. They are not
+            # a new user turn — appending them as one would look like a fresh
+            # question interrupting a continuation — so every system message
+            # joins the single instruction block that leads the history.
+            text = content if isinstance(content, str) else system_text(content)
+            if text.strip():
+                instructions.append(text.strip())
+            continue
         if role not in ("user", "assistant"):
             raise ValueError(f"unsupported message role {role!r}")
         if isinstance(content, str):
@@ -174,6 +185,11 @@ def bridge_messages(body: MessagesIn) -> list[dict[str, Any]]:
             history.append(entry)
         history.extend(tool_results)
 
+    if instructions:
+        history.insert(
+            0,
+            {"role": "system", "content": "\n\n".join(instructions)},
+        )
     return history
 
 

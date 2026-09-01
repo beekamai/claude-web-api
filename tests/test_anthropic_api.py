@@ -194,6 +194,27 @@ class MessagesEndpointTests(unittest.TestCase):
             self.assertEqual("system", first["role"])
             self.assertEqual("be terse", first["content"])
 
+    def test_mid_conversation_system_message_is_carried(self) -> None:
+        """Claude Code sends operator instructions as their own system turn."""
+        with self.run_with(native("ok")):
+            response = self.post(
+                {
+                    "model": "claude-web",
+                    "max_tokens": 64,
+                    "messages": [
+                        {"role": "user", "content": "hi"},
+                        {"role": "system", "content": "be terse"},
+                    ],
+                }
+            )
+        self.assertEqual(200, response.status_code)
+        history = self.captured[0].messages
+        self.assertEqual(
+            {"role": "system", "content": "be terse"},
+            history[0],
+        )
+        self.assertNotIn("system", [entry["role"] for entry in history[1:]])
+
     def test_unsupported_block_is_refused_not_dropped(self) -> None:
         response = self.post(
             {
