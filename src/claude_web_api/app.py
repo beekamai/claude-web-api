@@ -13,7 +13,9 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
@@ -84,6 +86,33 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(anthropic_api.router)
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, exc: RequestValidationError):
+    """Clients of the Messages API expect Anthropic's error envelope.
+
+    FastAPI's default body would reach Claude Code as an unparseable shape, so
+    the Messages paths answer in their own protocol; everything else keeps the
+    framework default.
+    """
+    if request.url.path.startswith("/v1/messages"):
+        detail = "; ".join(
+            f"{'.'.join(str(part) for part in error.get('loc', ())[1:])}: "
+            f"{error.get('msg', 'invalid value')}"
+            for error in exc.errors()
+        )
+        return JSONResponse(
+            status_code=400,
+            content=anthropic_api.error_payload(
+                400, detail or "invalid request body"
+            ),
+        )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(exc.errors())},
+    )
+
+
 app.include_router(control_api.router)
 app.include_router(openai_api.router)
 

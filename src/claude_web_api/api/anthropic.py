@@ -310,7 +310,10 @@ async def create_message(
     try:
         inner = _bridge_request(body)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        return JSONResponse(
+            status_code=400,
+            content=error_payload(400, public_error_message(exc)),
+        )
 
     response_id = protocol.message_id()
     model = runtime.resolve_request_model(body.model) or body.model

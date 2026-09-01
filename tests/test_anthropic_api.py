@@ -213,7 +213,9 @@ class MessagesEndpointTests(unittest.TestCase):
             }
         )
         self.assertEqual(400, response.status_code)
-        self.assertIn("image", response.json()["detail"])
+        body = response.json()
+        self.assertEqual("invalid_request_error", body["error"]["type"])
+        self.assertIn("image", body["error"]["message"])
 
     def test_upstream_failure_uses_the_anthropic_error_shape(self) -> None:
         async def failing(request_body, **kwargs):
@@ -234,14 +236,26 @@ class MessagesEndpointTests(unittest.TestCase):
         self.assertEqual("invalid_request_error", body["error"]["type"])
         self.assertIn("browser profile", body["error"]["message"])
 
-    def test_missing_max_tokens_is_rejected(self) -> None:
+    def test_missing_max_tokens_is_rejected_in_the_anthropic_shape(
+        self,
+    ) -> None:
+        """A schema failure must still be parseable by an Anthropic client."""
         response = self.post(
             {
                 "model": "claude-web",
                 "messages": [{"role": "user", "content": "hi"}],
             }
         )
+        self.assertEqual(400, response.status_code)
+        body = response.json()
+        self.assertEqual("error", body["type"])
+        self.assertEqual("invalid_request_error", body["error"]["type"])
+        self.assertIn("max_tokens", body["error"]["message"])
+
+    def test_other_endpoints_keep_the_framework_error_shape(self) -> None:
+        response = self.client.post("/v1/chat/completions", json={})
         self.assertEqual(422, response.status_code)
+        self.assertIn("detail", response.json())
 
 
 class MessagesStreamTests(unittest.TestCase):
