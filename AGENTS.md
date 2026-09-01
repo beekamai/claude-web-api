@@ -54,13 +54,15 @@ scripts/            PowerShell entry points (Windows is the primary host)
 Checks, from the repository root:
 
 ```powershell
-.\.python\python.exe -m unittest discover -s tests -t tests
+.\.python\python.exe -m unittest discover -s tests -t .
 .\.python\python.exe -m ruff check .
 ```
 
-`unittest discover` needs both `-s tests` and `-t tests`; the suite does not
-import as a package. The tests never launch a browser — everything below the
-provider boundary is faked.
+The suite is a package: `tests/__init__.py` redirects the telemetry database
+to a temporary file before anything imports `claude_web_api`, which is why
+discovery runs with `-t .` and shared fixtures are imported as
+`from tests.support import ...`. The tests never launch a browser —
+everything below the provider boundary is faked.
 
 ## Rules that keep this working
 

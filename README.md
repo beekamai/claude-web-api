@@ -130,7 +130,7 @@ Details: [`docs/configuration.md`](docs/configuration.md).
 ## Development
 
 ```powershell
-.\.python\python.exe -m unittest discover -s tests -t tests
+.\.python\python.exe -m unittest discover -s tests -t .
 .\.python\python.exe -m ruff check .
 ```
 
@@ -233,7 +233,7 @@ Cookies браузера, сырые UUID аккаунта и сессии, си
 ## Разработка
 
 ```powershell
-.\.python\python.exe -m unittest discover -s tests -t tests
+.\.python\python.exe -m unittest discover -s tests -t .
 .\.python\python.exe -m ruff check .
 ```
 
