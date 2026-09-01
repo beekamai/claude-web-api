@@ -41,6 +41,20 @@ def _home() -> Path:
     return Path(os.path.expanduser("~"))
 
 
+def claude_code_installer(platform: str = os.name) -> tuple[str, ...]:
+    """Windows gets Anthropic's native installer, which needs no Node."""
+    if platform == "nt":
+        return (
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "irm https://claude.ai/install.ps1 | iex",
+        )
+    return ("npm", "install", "-g", "@anthropic-ai/claude-code")
+
+
 def definitions() -> list[ClientDefinition]:
     home = _home()
     return [
@@ -50,18 +64,7 @@ def definitions() -> list[ClientDefinition]:
             executables=("claude",),
             home=home / ".claude",
             settings_file="settings.json",
-            install_command=(
-                (
-                    "powershell",
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-Command",
-                    "irm https://claude.ai/install.ps1 | iex",
-                )
-                if os.name == "nt"
-                else ("npm", "install", "-g", "@anthropic-ai/claude-code")
-            ),
+            install_command=claude_code_installer(),
             docs="docs/claude-code-setup.md",
             notes=(
                 "Модель передаётся флагом --model claude-web.",

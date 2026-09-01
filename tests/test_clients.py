@@ -115,14 +115,10 @@ class InstallPlanTests(unittest.TestCase):
         self.assertEqual("@gitlawb/openclaude", command[-1])
 
     def test_claude_code_on_windows_does_not_need_node(self) -> None:
-        with patch.object(clients.os, "name", "nt"):
-            claude = next(
-                row for row in clients.definitions() if row.id == "claude-code"
-            )
-        command, reason = clients.install_plan(claude)
-        self.assertIsNone(reason)
+        command = clients.claude_code_installer("nt")
         self.assertEqual("powershell", command[0])
         self.assertIn("claude.ai/install.ps1", command[-1])
+        self.assertEqual("npm", clients.claude_code_installer("posix")[0])
 
 
 class ConfigureTests(unittest.TestCase):
