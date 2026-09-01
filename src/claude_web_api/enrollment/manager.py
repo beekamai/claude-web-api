@@ -1340,8 +1340,8 @@ class ProfileEnrollmentManager:
                         verified?.prompt_template || ''
                       );
                       const legacyPrefix =
-                        `${instructions}\n\n`
-                        + 'DYNAMIC_OPENCLAUDE_SYSTEM_CONTEXT\n';
+                        `${instructions}\\n\\n`
+                        + 'DYNAMIC_OPENCLAUDE_SYSTEM_CONTEXT\\n';
                       const legacyDynamicPrompt =
                         promptTemplate.startsWith(legacyPrefix)
                         && promptTemplate.length > legacyPrefix.length;
