@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from claude_web_api import __version__, completions, runtime
+from claude_web_api.api import anthropic as anthropic_api
 from claude_web_api.api import control as control_api
 from claude_web_api.api import openai as openai_api
 from claude_web_api.paths import (
@@ -82,6 +83,7 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
 )
+app.include_router(anthropic_api.router)
 app.include_router(control_api.router)
 app.include_router(openai_api.router)
 
