@@ -20,8 +20,9 @@ os.environ["OPENCLAUDE_TELEMETRY_DB"] = str(
 )
 
 import claude_web_api.app as server
-from claude_web_api import runtime, sanitize
+from claude_web_api import completions, runtime, sanitize
 from claude_web_api.api import control as control_api
+from claude_web_api.api import openai as openai_api
 from claude_web_api.control.config import (
     CONFIG_VERSION,
     SUPPORTED_PROFILE_PROVIDERS,
@@ -1947,7 +1948,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             "selectable_models",
             return_value=catalog,
         ):
-            response = await server.list_models()
+            response = await openai_api.list_models()
         self.assertEqual(
             ["claude-web", "claude-sonnet-test"],
             [row["id"] for row in response["data"]],
@@ -2722,10 +2723,10 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             )
 
     def test_single_user_request_starts_fresh_without_system(self) -> None:
-        body = server.CompletionsIn(
+        body = completions.CompletionsIn(
             messages=[{"role": "user", "content": "hello"}]
         )
-        self.assertTrue(server._client_starts_fresh_chat(body))
+        self.assertTrue(completions._client_starts_fresh_chat(body))
 
     def test_partial_or_boolean_usage_is_not_fabricated(self) -> None:
         self.assertIsNone(openai_usage({"input_tokens": 10}))
@@ -2925,10 +2926,10 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("opaque-client-session", serialized)
 
     def test_max_tokens_maps_to_openai_length_finish_reason(self) -> None:
-        body = server.CompletionsIn(
+        body = completions.CompletionsIn(
             messages=[{"role": "user", "content": "hello"}]
         )
-        response = server._completion_response(
+        response = openai_api._completion_response(
             body,
             NativeTurn(
                 content="partial",
@@ -2957,7 +2958,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
     def test_same_openclaude_session_does_not_reset_each_single_user_turn(
         self,
     ) -> None:
-        body = server.CompletionsIn(
+        body = completions.CompletionsIn(
             messages=[{"role": "user", "content": "next turn"}]
         )
         with patch.object(
@@ -2966,27 +2967,27 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             side_effect=[True, False, True],
         ):
             self.assertTrue(
-                server._request_starts_fresh_chat(body, "session-a")
+                completions._request_starts_fresh_chat(body, "session-a")
             )
             self.assertFalse(
-                server._request_starts_fresh_chat(body, "session-a")
+                completions._request_starts_fresh_chat(body, "session-a")
             )
             self.assertTrue(
-                server._request_starts_fresh_chat(body, "session-b")
+                completions._request_starts_fresh_chat(body, "session-b")
             )
 
     def test_runtime_metadata_survives_every_tool_catalog_shape(self) -> None:
         cases = (
             (
                 "omitted",
-                server.CompletionsIn(
+                completions.CompletionsIn(
                     messages=[SYSTEM, {"role": "user", "content": "where"}],
                 ),
                 [OPENCLAUDE_CONTEXT_TOOL_NAME],
             ),
             (
                 "empty",
-                server.CompletionsIn(
+                completions.CompletionsIn(
                     messages=[SYSTEM, {"role": "user", "content": "where"}],
                     tools=[],
                 ),
@@ -2994,7 +2995,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             ),
             (
                 "present",
-                server.CompletionsIn(
+                completions.CompletionsIn(
                     messages=[SYSTEM, {"role": "user", "content": "where"}],
                     tools=TOOLS,
                 ),
@@ -3002,7 +3003,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             ),
             (
                 "choice_none",
-                server.CompletionsIn(
+                completions.CompletionsIn(
                     messages=[SYSTEM, {"role": "user", "content": "where"}],
                     tools=TOOLS,
                     tool_choice="none",
@@ -3011,7 +3012,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             ),
             (
                 "named_choice",
-                server.CompletionsIn(
+                completions.CompletionsIn(
                     messages=[SYSTEM, {"role": "user", "content": "where"}],
                     tools=TOOLS,
                     tool_choice={
@@ -3024,7 +3025,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         )
         for label, body, expected_names in cases:
             with self.subTest(label=label):
-                mapped = server._native_tools_with_runtime(
+                mapped = completions._native_tools_with_runtime(
                     body,
                     client_working_directory=r"D:\CodeWorks\explicit",
                 )
@@ -3064,7 +3065,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_toolless_request_uses_internal_context_and_preserves_user_input(
         self,
     ) -> None:
-        body = server.CompletionsIn(
+        body = completions.CompletionsIn(
             messages=[{"role": "user", "content": "Где мы сейчас?"}],
         )
         native = AsyncMock(
@@ -3106,7 +3107,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(runtime.session, "native_chat", native),
         ):
-            await server._native_request(
+            await completions.native_request(
                 body,
                 client_session_id="openclaude-session",
                 client_working_directory=r"D:\CodeWorks\test",
@@ -3138,7 +3139,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_custom_persona_is_applied_to_user_turn_and_runtime_context(
         self,
     ) -> None:
-        body = server.CompletionsIn(
+        body = completions.CompletionsIn(
             messages=[{"role": "user", "content": "Привет, ты кто?"}],
         )
         native = AsyncMock(
@@ -3179,7 +3180,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             ) as behavior_snapshot,
             patch.object(runtime.session, "native_chat", native),
         ):
-            await server._native_request(
+            await completions.native_request(
                 body,
                 client_session_id="persona-session",
                 client_working_directory=r"D:\CodeWorks\test",
@@ -3224,7 +3225,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_default_persona_explicitly_resets_older_role(
         self,
     ) -> None:
-        body = server.CompletionsIn(
+        body = completions.CompletionsIn(
             messages=[{"role": "user", "content": "Теперь без образа."}],
         )
         native = AsyncMock(
@@ -3261,7 +3262,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(runtime.session, "native_chat", native),
         ):
-            await server._native_request(
+            await completions.native_request(
                 body,
                 client_session_id="persona-reset-session",
                 client_working_directory=r"D:\CodeWorks\test",
@@ -3349,14 +3350,14 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         self.assertEqual(
             r"D:\CodeWorks\test",
-            server._validated_client_header(
+            completions.validated_client_header(
                 "  D:\\CodeWorks\\test  ",
                 name="X-OpenClaude-Working-Directory",
                 max_length=4096,
             ),
         )
         with self.assertRaisesRegex(server.HTTPException, "invalid"):
-            server._validated_client_header(
+            completions.validated_client_header(
                 "D:\\CodeWorks\\test\ninjected",
                 name="X-OpenClaude-Working-Directory",
                 max_length=4096,
@@ -3366,8 +3367,8 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         with self.assertRaises(server.HTTPException) as caught:
-            await server.openai_compat(
-                server.CompletionsIn(
+            await openai_api.openai_compat(
+                completions.CompletionsIn(
                     messages=[{"role": "user", "content": "hello"}],
                 ),
                 x_claude_code_session_id="legacy-session",
@@ -3376,7 +3377,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(400, caught.exception.status_code)
 
     async def test_privacy_transition_rebuilds_bridge_context(self) -> None:
-        body = server.CompletionsIn(
+        body = completions.CompletionsIn(
             messages=[SYSTEM, {"role": "user", "content": "где работаем?"}],
             tools=TOOLS,
         )
@@ -3414,7 +3415,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(runtime.session, "native_chat", native),
         ):
-            await server._native_request(
+            await completions.native_request(
                 body,
                 client_session_id="same-session",
             )
@@ -3445,14 +3446,12 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_conversation_rollover_usage_limit_enters_rotation(
         self,
     ) -> None:
-        body = server.CompletionsIn(
+        body = completions.CompletionsIn(
             messages=[{"role": "user", "content": "continue"}]
         )
         rotated = NativeTurn(content="continued", tool_uses=[])
         with (
-            patch.object(
-                server,
-                "_native_request",
+            patch.object(completions, "native_request",
                 AsyncMock(
                     side_effect=ClaudeConversationLimitError(
                         "conversation full",
@@ -3470,13 +3469,11 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                     )
                 ),
             ),
-            patch.object(
-                server,
-                "_rotate_after_usage_limit",
+            patch.object(completions, "_rotate_after_usage_limit",
                 AsyncMock(return_value=rotated),
             ) as rotate,
         ):
-            result = await server._run_native_with_limits(
+            result = await completions.run_native_with_limits(
                 body,
                 client_session_id="session-a",
                 event_sink=None,
@@ -3491,7 +3488,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_conversation_limit_retry_preserves_character_card(
         self,
     ) -> None:
-        body = server.CompletionsIn(
+        body = completions.CompletionsIn(
             messages=[
                 {"role": "user", "content": "девушка ведь моя?"},
             ]
@@ -3516,9 +3513,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                 "behavior_snapshot",
                 return_value=(behavior, resolved_persona),
             ),
-            patch.object(
-                server,
-                "_native_request",
+            patch.object(completions, "native_request",
                 AsyncMock(
                     side_effect=ClaudeConversationLimitError(
                         "conversation full",
@@ -3533,7 +3528,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(runtime.session, "native_chat", retry),
         ):
-            result = await server._run_native_with_limits(
+            result = await completions.run_native_with_limits(
                 body,
                 client_session_id="persona-session",
                 event_sink=None,
@@ -3556,7 +3551,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_profile_rotation_retry_preserves_character_card(
         self,
     ) -> None:
-        body = server.CompletionsIn(
+        body = completions.CompletionsIn(
             messages=[
                 {"role": "user", "content": "девушка ведь моя?"},
             ]
@@ -3595,7 +3590,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             patch.object(runtime, "resolve_request_model", return_value=None),
             patch.object(runtime.telemetry, "log"),
         ):
-            result = await server._rotate_after_usage_limit(
+            result = await completions._rotate_after_usage_limit(
                 body,
                 client_session_id="persona-session",
                 event_sink=None,
@@ -3642,8 +3637,8 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                     )
                 )
                 with patch.object(runtime.session, "native_chat", fake):
-                    response = await server.openai_compat(
-                        server.CompletionsIn(
+                    response = await openai_api.openai_compat(
+                        completions.CompletionsIn(
                             messages=[SYSTEM, {"role": "user", "content": prompt}],
                             tools=TOOLS,
                         )
@@ -3668,8 +3663,8 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         with patch.object(runtime.session, "native_chat", fake):
-            response = await server.openai_compat(
-                server.CompletionsIn(
+            response = await openai_api.openai_compat(
+                completions.CompletionsIn(
                     messages=[
                         SYSTEM,
                         {"role": "user", "content": "read requirements"},
@@ -3727,8 +3722,8 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             patch.object(runtime.session, "continue_native", continuation),
             patch.object(runtime.session, "native_chat", start),
         ):
-            response = await server.openai_compat(
-                server.CompletionsIn(messages=messages, tools=TOOLS)
+            response = await openai_api.openai_compat(
+                completions.CompletionsIn(messages=messages, tools=TOOLS)
             )
         continuation.assert_awaited_once()
         start.assert_not_awaited()
@@ -3808,8 +3803,8 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                 recovered,
             ),
         ):
-            response = await server.openai_compat(
-                server.CompletionsIn(messages=messages, tools=TOOLS),
+            response = await openai_api.openai_compat(
+                completions.CompletionsIn(messages=messages, tools=TOOLS),
                 x_openclaude_session_id="session-a",
             )
 
@@ -3892,8 +3887,8 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                 recovered,
             ),
         ):
-            response = await server.openai_compat(
-                server.CompletionsIn(messages=messages, tools=TOOLS)
+            response = await openai_api.openai_compat(
+                completions.CompletionsIn(messages=messages, tools=TOOLS)
             )
         restored_message = fake.await_args.args[0]
         self.assertIn("EARLIER_IDE_CONVERSATION", restored_message)
@@ -3913,8 +3908,8 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             return_value=NativeTurn(content="ok", tool_uses=[])
         )
         with patch.object(runtime.session, "native_chat", fake):
-            response = await server.openai_compat(
-                server.CompletionsIn(
+            response = await openai_api.openai_compat(
+                completions.CompletionsIn(
                     messages=[SYSTEM, {"role": "user", "content": "hello"}]
                 )
             )
@@ -3947,8 +3942,8 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
         ):
-            response = await server.openai_compat(
-                server.CompletionsIn(
+            response = await openai_api.openai_compat(
+                completions.CompletionsIn(
                     messages=[SYSTEM, {"role": "user", "content": "hello"}]
                 )
             )
@@ -3966,7 +3961,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_live_stream_relays_deltas_before_native_turn_finishes(self) -> None:
-        body = server.CompletionsIn(
+        body = completions.CompletionsIn(
             messages=[SYSTEM, {"role": "user", "content": "hello"}],
             stream=True,
         )
@@ -3990,8 +3985,8 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             return NativeTurn(content="Привет", tool_uses=[])
 
         chunks: list[str] = []
-        with patch.object(server, "_run_native_with_limits", new=fake_run):
-            async for chunk in server._chat_event_stream(
+        with patch.object(completions, "run_native_with_limits", new=fake_run):
+            async for chunk in openai_api._chat_event_stream(
                 body,
                 completion_id="chatcmpl-test",
                 created=1,
@@ -4021,16 +4016,14 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 cancelled.set()
 
-        body = server.CompletionsIn(
+        body = completions.CompletionsIn(
             messages=[{"role": "user", "content": "hello"}],
             stream=True,
         )
-        with patch.object(
-            server,
-            "_run_native_with_limits",
+        with patch.object(completions, "run_native_with_limits",
             side_effect=wait_forever,
         ):
-            stream = server._chat_event_stream(
+            stream = openai_api._chat_event_stream(
                 body,
                 "chatcmpl-close",
                 123,
