@@ -91,6 +91,40 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual("elsewhere", self.snapshot()["connection"])
 
 
+class InstallPlanTests(unittest.TestCase):
+    """Installing from the panel must name the missing prerequisite instead
+    of failing with WinError 2."""
+
+    def test_missing_npm_is_explained_not_executed(self) -> None:
+        with patch.object(clients, "_on_path", return_value=[]):
+            command, reason = clients.install_plan(
+                definition(Path(tempfile.gettempdir()))
+            )
+        self.assertIsNone(command)
+        self.assertIn("nodejs.org", reason)
+
+    def test_npm_is_resolved_to_its_real_launcher(self) -> None:
+        with patch.object(
+            clients, "_on_path", return_value=[r"C:\nodejs\npm.cmd"]
+        ):
+            command, reason = clients.install_plan(
+                definition(Path(tempfile.gettempdir()))
+            )
+        self.assertIsNone(reason)
+        self.assertEqual(r"C:\nodejs\npm.cmd", command[0])
+        self.assertEqual("@gitlawb/openclaude", command[-1])
+
+    def test_claude_code_on_windows_does_not_need_node(self) -> None:
+        with patch.object(clients.os, "name", "nt"):
+            claude = next(
+                row for row in clients.definitions() if row.id == "claude-code"
+            )
+        command, reason = clients.install_plan(claude)
+        self.assertIsNone(reason)
+        self.assertEqual("powershell", command[0])
+        self.assertIn("claude.ai/install.ps1", command[-1])
+
+
 class ConfigureTests(unittest.TestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()

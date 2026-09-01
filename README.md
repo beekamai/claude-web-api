@@ -81,7 +81,9 @@ once: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. `setup.cmd` does
 the same for the manual setup.
 
 The first run opens a visible browser — log into `claude.ai` there. The session
-is stored in `profile\`, and the main runtime goes headless afterwards.
+is stored in `%LOCALAPPDATA%\claude-web-api\profile\` — outside the code folder,
+so you can delete or replace the checkout freely — and the main runtime goes
+headless afterwards.
 
 ```text
 API:            http://127.0.0.1:8765
@@ -234,7 +236,9 @@ cd claude-web-api
 есть `setup.cmd`.
 
 При первом запуске откроется видимый браузер — войдите там в `claude.ai`.
-Сессия сохранится в `profile\`, дальше рантайм работает headless.
+Сессия сохранится в `%LOCALAPPDATA%\claude-web-api\profile\` — вне папки с
+кодом, так что её можно удалять и заменять свежим архивом, — дальше рантайм
+работает headless.
 
 ```text
 API:     http://127.0.0.1:8765

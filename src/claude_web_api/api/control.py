@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from claude_web_api import __version__, clients, runtime
 from claude_web_api.control import proxy as proxy_settings
 from claude_web_api.control.config import ControlConfig
-from claude_web_api.paths import PROJECT_INSTRUCTIONS, PROJECT_ROOT
+from claude_web_api.paths import DATA_ROOT, PROJECT_INSTRUCTIONS, PROJECT_ROOT
 from claude_web_api.providers.claude_web import CLAUDE_WEB_PROVIDER_ID
 from claude_web_api.sanitize import (
     public_error_message,
@@ -105,6 +105,7 @@ async def control_state():
             "version": __version__,
             "port": int(os.getenv("PORT", "8765")),
             "project_root": str(PROJECT_ROOT),
+            "data_root": str(DATA_ROOT),
             "working_directory": os.getcwd(),
             "streaming_is_live": bool(
                 runtime.control.behavior().get("streaming")
@@ -1062,15 +1063,16 @@ async def install_client(client_id: str):
     definition = clients.find_definition(client_id)
     if definition is None:
         raise HTTPException(404, "unknown client")
-    if not definition.install_command:
-        raise HTTPException(400, "installation is not supported for this client")
+    command, reason = clients.install_plan(definition)
+    if command is None:
+        raise HTTPException(400, reason or "installation is not supported")
     state = runtime.client_installs.get(client_id)
     if state and state.get("status") == "running":
         return state
     state = {
         "client": client_id,
         "status": "running",
-        "command": " ".join(definition.install_command),
+        "command": " ".join(command),
         "started_at": time.time(),
         "output": "",
     }
@@ -1078,7 +1080,7 @@ async def install_client(client_id: str):
     # The state dict is serialised into responses, so the task itself is kept
     # beside it rather than inside it.
     runtime.client_install_tasks[client_id] = asyncio.create_task(
-        _run_install(definition, state),
+        _run_install(command, state),
         name=f"install-{client_id}",
     )
     runtime.telemetry.log(
@@ -1098,14 +1100,10 @@ async def install_client_status(client_id: str):
 
 
 async def _run_install(
-    definition: clients.ClientDefinition,
+    command: tuple[str, ...],
     state: dict[str, Any],
 ) -> None:
     """Run the client's installer, keeping only a bounded tail of its output."""
-    command = definition.install_command
-    if not command:
-        state.update(status="error", output="installer is not defined")
-        return
     try:
         process = await asyncio.create_subprocess_exec(
             *command,

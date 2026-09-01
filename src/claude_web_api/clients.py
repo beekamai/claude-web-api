@@ -51,10 +51,16 @@ def definitions() -> list[ClientDefinition]:
             home=home / ".claude",
             settings_file="settings.json",
             install_command=(
-                "npm",
-                "install",
-                "-g",
-                "@anthropic-ai/claude-code",
+                (
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    "irm https://claude.ai/install.ps1 | iex",
+                )
+                if os.name == "nt"
+                else ("npm", "install", "-g", "@anthropic-ai/claude-code")
             ),
             docs="docs/claude-code-setup.md",
             notes=(
@@ -86,13 +92,8 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _candidates(definition: ClientDefinition) -> list[str]:
-    """Every launcher on PATH for this client, best-supported form first.
-
-    npm installs a POSIX shim next to the Windows one, and a user may shadow
-    both with a wrapper of their own. Any of them can be the broken one, so the
-    caller tries them in turn rather than trusting the first hit.
-    """
+def _on_path(name: str) -> list[str]:
+    """Every file on PATH that runs as ``name``, Windows launchers first."""
     suffixes = [""]
     if os.name == "nt":
         pathext = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
@@ -101,15 +102,53 @@ def _candidates(definition: ClientDefinition) -> list[str]:
             "",
         ]
     found: list[str] = []
-    for name in definition.executables:
-        for suffix in suffixes:
-            for directory in os.environ.get("PATH", "").split(os.pathsep):
-                if not directory:
-                    continue
-                candidate = Path(directory) / f"{name}{suffix}"
-                if candidate.is_file() and str(candidate) not in found:
-                    found.append(str(candidate))
+    for suffix in suffixes:
+        for directory in os.environ.get("PATH", "").split(os.pathsep):
+            if not directory:
+                continue
+            candidate = Path(directory) / f"{name}{suffix}"
+            if candidate.is_file() and str(candidate) not in found:
+                found.append(str(candidate))
     return found
+
+
+def _candidates(definition: ClientDefinition) -> list[str]:
+    """Every launcher on PATH for this client, best-supported form first.
+
+    npm installs a POSIX shim next to the Windows one, and a user may shadow
+    both with a wrapper of their own. Any of them can be the broken one, so the
+    caller tries them in turn rather than trusting the first hit.
+    """
+    found: list[str] = []
+    for name in definition.executables:
+        for path in _on_path(name):
+            if path not in found:
+                found.append(path)
+    return found
+
+
+def install_plan(
+    definition: ClientDefinition,
+) -> tuple[tuple[str, ...] | None, str | None]:
+    """The command that installs the client here, or why there is none.
+
+    ``npm`` is resolved to its real launcher: a bare ``npm`` fails on Windows
+    with WinError 2 even when Node is installed, and when Node is absent the
+    user needs to be told that rather than shown the error.
+    """
+    command = definition.install_command
+    if not command:
+        return None, "установка из панели не поддерживается"
+    launcher = command[0]
+    if launcher == "npm":
+        found = _on_path("npm")
+        if not found:
+            return None, (
+                "нужен Node.js (npm не найден): установите его с nodejs.org "
+                "и обновите эту страницу"
+            )
+        return (found[0], *command[1:]), None
+    return command, None
 
 
 def _version(executable: str) -> tuple[str | None, str | None]:
@@ -200,7 +239,8 @@ def client_snapshot(definition: ClientDefinition, port: int) -> dict[str, Any]:
         ),
         "config_path": source,
         "config_exists": Path(source).exists(),
-        "can_install": bool(definition.install_command),
+        "can_install": install_plan(definition)[0] is not None,
+        "install_note": install_plan(definition)[1],
         "docs": definition.docs,
         "notes": list(definition.notes),
     }

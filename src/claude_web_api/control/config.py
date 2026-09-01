@@ -20,6 +20,7 @@ from claude_web_api.paths import (
 from claude_web_api.paths import (
     LEGACY_PROFILE_DIR,
     LEGACY_PROJECT_FILE,
+    migrate_legacy_state,
 )
 
 PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
@@ -455,6 +456,9 @@ class ControlConfig:
     def __init__(self, path: Path = CONFIG_PATH) -> None:
         self.path = path
         self._lock = threading.RLock()
+        if path == CONFIG_PATH:
+            # State used to live beside the code; carry it over once.
+            migrate_legacy_state()
         self._data = self._load()
 
     def _load(self) -> dict[str, Any]:

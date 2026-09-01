@@ -136,9 +136,16 @@ left a decorator behind and silently re-bound `/api/control/state` to `main()`.
 - FastAPI's `include_router` mounts a router as a single node, so
   `len(app.routes)` does not grow by the number of endpoints. Read
   `/openapi.json` to see what is actually served.
-- Account-scoped files (`control_config.json`, `claude_project.json`,
-  `project_prompt_leases.json`) are gitignored and recreated from defaults on
-  first run. `*.example.json` files document their shape.
+- State lives outside the checkout, in `paths.DATA_ROOT`
+  (`%LOCALAPPDATA%\claude-web-api` on Windows, overridable with
+  `CLAUDE_WEB_API_DATA`): `control_config.json`, `claude_project.json`,
+  `project_prompt_leases.json`, the browser profiles and the telemetry
+  database. Users update by replacing the code folder with a fresh archive,
+  which is why nothing account-scoped may live beside the code. Older layouts
+  are migrated once by `paths.migrate_legacy_state`; a profile a browser still
+  holds open is retried on the next start. `*.example.json` files document the
+  shape. Note that importing `runtime` constructs the default `ControlConfig`,
+  so the test suite triggers this migration on a developer machine too.
 - `mypy` is clean and runs in CI. Keep it that way: if a check cannot be
   satisfied honestly, fix the type rather than suppressing the error.
 - **A client hanging up is normal, not a browser failure.** Ctrl+C in the IDE

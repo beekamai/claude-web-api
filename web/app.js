@@ -940,6 +940,14 @@
           }),
         );
       }
+      if (!client.installed && client.install_note) {
+        parts.push(
+          node("p", {
+            className: "client-note client-note--warning",
+            text: client.install_note,
+          }),
+        );
+      }
       (client.notes || []).forEach((note) => {
         parts.push(node("p", { className: "client-note", text: note }));
       });
