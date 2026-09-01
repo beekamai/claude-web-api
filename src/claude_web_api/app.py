@@ -14,7 +14,6 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Annotated, Any, Callable
 
 from fastapi import FastAPI, Header, HTTPException, Query
@@ -27,11 +26,10 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from claude_web_api import runtime
 from claude_web_api.control.config import ControlConfig
-from claude_web_api.enrollment.manager import ProfileEnrollmentManager
 from claude_web_api.paths import (
     PROJECT_INSTRUCTIONS,
-    PROJECT_PROMPT_LEASE_FILE,
     PROJECT_ROOT,
     WEB_ROOT,
 )
@@ -53,7 +51,6 @@ from claude_web_api.protocol.openai import (
 from claude_web_api.protocol.openai_usage import openai_usage
 from claude_web_api.providers.claude_web import (
     CLAUDE_WEB_PROVIDER_ID,
-    ClaudeWebProviderAdapter,
 )
 from claude_web_api.providers.contracts import (
     ProviderEvent,
@@ -62,7 +59,6 @@ from claude_web_api.providers.contracts import (
     ProviderTurn,
     ProviderTurnRequest,
 )
-from claude_web_api.providers.registry import ProviderRegistry
 from claude_web_api.sanitize import public_error_message, sanitize_public_text
 from claude_web_api.session.claude import (
     ClaudeAccountIdentityError,
@@ -70,373 +66,28 @@ from claude_web_api.session.claude import (
     ClaudeCompletionRejectedError,
     ClaudeConversationLimitError,
     ClaudeServiceUnavailableError,
-    ClaudeSession,
     ClaudeTurnOutcomeUnknownError,
     ClaudeUsageLimitError,
     NativeToolUse,
     NativeTurn,
 )
-from claude_web_api.telemetry.runtime import RuntimeTelemetry
 from claude_web_api.telemetry.store import TelemetryStore
-
-BRIDGE_INSTRUCTIONS = PROJECT_INSTRUCTIONS.read_text(encoding="utf-8")
-HEADLESS = os.getenv("CLAUDE_HEADLESS", "0").lower() in ("1", "true", "yes")
-DEBUG_REQUESTS = os.getenv("CLAUDE_DEBUG_REQUESTS", "0").lower() in (
-    "1",
-    "true",
-    "yes",
-)
-
-control = ControlConfig()
-GROK_WEB_PROVIDER_ID = "grok_web"
-
-
-def _profile_provider_id(profile_id: str | None) -> str:
-    if not profile_id:
-        return CLAUDE_WEB_PROVIDER_ID
-    try:
-        profile = control.profile(profile_id)
-    except KeyError:
-        return CLAUDE_WEB_PROVIDER_ID
-    return str(
-        profile.get("provider") or CLAUDE_WEB_PROVIDER_ID
-    ).strip() or CLAUDE_WEB_PROVIDER_ID
-
-
-def _provider_profile_id(provider_id: str) -> str:
-    rows = [
-        row
-        for row in control.session_profiles()
-        if row.get("provider", CLAUDE_WEB_PROVIDER_ID) == provider_id
-    ]
-    if not rows:
-        raise RuntimeError(
-            f"no configured browser profile for provider {provider_id!r}"
-        )
-    active_id = control.snapshot()["active_profile"]
-    active = next((row for row in rows if row["id"] == active_id), None)
-    if active is not None:
-        return str(active["id"])
-    for status in ("ready", "limited", "configured", "auth_required"):
-        candidate = next(
-            (
-                row
-                for row in rows
-                if control.profile(row["id"]).get("status") == status
-            ),
-            None,
-        )
-        if candidate is not None:
-            return str(candidate["id"])
-    return str(rows[0]["id"])
-
-
-def _runtime_profiles(
-    provider_id: str = CLAUDE_WEB_PROVIDER_ID,
-) -> list[dict[str, Any]]:
-    snapshot = control.snapshot()
-    del snapshot
-    active = _provider_profile_id(provider_id)
-    allowed = []
-    for row in control.session_profiles():
-        if row.get("provider", CLAUDE_WEB_PROVIDER_ID) != provider_id:
-            continue
-        raw = control.profile(row["id"])
-        if not raw.get("enabled", True):
-            continue
-        if (
-            raw["id"] != active
-            and raw.get("status") not in {"ready", "limited"}
-        ):
-            continue
-        allowed.append(row)
-    if not any(row["id"] == active for row in allowed):
-        allowed.insert(
-            0,
-            next(
-                row
-                for row in control.session_profiles()
-                if row["id"] == active
-            ),
-        )
-    return allowed
-
-
-def _eligible_rotation_ids() -> set[str]:
-    now = time.time()
-    eligible: set[str] = set()
-    for row in control.session_profiles():
-        if (
-            row.get("provider", CLAUDE_WEB_PROVIDER_ID)
-            != CLAUDE_WEB_PROVIDER_ID
-        ):
-            continue
-        profile = control.profile(row["id"])
-        if not profile.get("enabled", True):
-            continue
-        if profile.get("status") not in {"ready", "limited"}:
-            continue
-        limited_until = profile.get("limited_until")
-        if isinstance(limited_until, (int, float)) and limited_until > now:
-            continue
-        eligible.add(row["id"])
-    return eligible
-
-
-def _resolve_request_model(
-    requested: str,
-    profile_id: str | None = None,
-) -> str | None:
-    requested = str(requested or "").strip()
-    # Completion requests currently execute on the Claude Camoufox runtime.
-    # The persisted control-plane active profile can legitimately name a
-    # fail-closed provider (for example after restoring a newer config), so it
-    # must never decide which model is sent to the actual browser runtime.
-    target_id = profile_id or session.current_profile_id()
-    try:
-        profile = control.profile(target_id)
-    except KeyError:
-        return None
-    if target_id == session.current_profile_id():
-        catalog = session.selectable_models()
-    else:
-        catalog = profile.get("models", [])
-    available = {
-        str(item.get("id"))
-        for item in catalog
-        if (
-            isinstance(item, dict)
-            and item.get("available") is True
-            and item.get("access_status") == "available"
-        )
-    }
-    if requested and requested not in {"claude-web", "auto"}:
-        if requested not in available:
-            reason = next(
-                (
-                    item.get("disabled_reason")
-                    for item in catalog
-                    if isinstance(item, dict)
-                    and str(item.get("id") or "") == requested
-                ),
-                None,
-            )
-            suffix = ""
-            if isinstance(reason, dict) and reason.get("required_plan"):
-                suffix = (
-                    f" (requires {reason['required_plan']} subscription)"
-                )
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Model {requested!r} is not available to the active "
-                    f"Claude account{suffix}."
-                ),
-            )
-        return requested
-    selected = str(profile.get("model") or "auto")
-    if selected in {"", "auto", "claude-web"}:
-        return None
-    # A stale saved selection must not make the alias unusable. Browser auto
-    # remains the safe fallback until account-scoped entitlement is verified.
-    return selected if selected in available else None
-
-
-session = ClaudeSession(
-    headless=HEADLESS,
-    profiles=_runtime_profiles(),
-    active_profile_id=_provider_profile_id(CLAUDE_WEB_PROVIDER_ID),
-    project_instructions=BRIDGE_INSTRUCTIONS,
-    project_prompt_lease_file=PROJECT_PROMPT_LEASE_FILE,
-)
-claude_provider = ClaudeWebProviderAdapter(session)
-provider_registry = ProviderRegistry()
-provider_registry.register(
-    CLAUDE_WEB_PROVIDER_ID,
-    claude_provider,
-    profile_ids=(
-        row["id"]
-        for row in control.session_profiles()
-        if row.get("provider", CLAUDE_WEB_PROVIDER_ID)
-        == CLAUDE_WEB_PROVIDER_ID
-    ),
-)
-enrollment = ProfileEnrollmentManager()
-profile_login_tasks: dict[str, asyncio.Task[dict[str, Any]]] = {}
-
-
-def _bind_claude_profile_route(profile: dict[str, Any]) -> None:
-    """Keep the registry aligned with mutable control-plane profile rows."""
-    if (
-        profile.get("provider", CLAUDE_WEB_PROVIDER_ID)
-        != CLAUDE_WEB_PROVIDER_ID
-    ):
-        return
-    provider_registry.bind_profile(
-        str(profile["id"]),
-        CLAUDE_WEB_PROVIDER_ID,
-        replace=True,
-    )
-
-
-def _is_active_claude_profile(profile: dict[str, Any]) -> bool:
-    if (
-        profile.get("provider", CLAUDE_WEB_PROVIDER_ID)
-        != CLAUDE_WEB_PROVIDER_ID
-    ):
-        return False
-    try:
-        active_path = Path(session.current_profile_spec()["path"]).resolve()
-        target_path = Path(profile["path"]).resolve()
-    except (KeyError, OSError, RuntimeError, TypeError, ValueError):
-        return False
-    return active_path == target_path
-
-
-def _provider_capabilities_snapshot() -> dict[str, dict[str, object]]:
-    snapshot = provider_registry.capabilities_snapshot()
-    snapshot.setdefault(
-        GROK_WEB_PROVIDER_ID,
-        {
-            "tool_continuation": "unsupported",
-            "streaming": False,
-            "thinking": False,
-            "profiles": True,
-            "ready": False,
-            "detail": (
-                "xAI currently blocks automated Camoufox and Playwright "
-                "Chrome sessions, while manual Chrome works on the same "
-                "machine and IP. Grok Web stays disabled until browser access "
-                "and its stream/tool behavior can be verified."
-            ),
-        },
-    )
-    return snapshot
-
-
-
-
-
-try:
-    telemetry = RuntimeTelemetry(TelemetryStore())
-except Exception as telemetry_error:
-    telemetry = RuntimeTelemetry()
-    telemetry.storage_error = public_error_message(telemetry_error)
-
-
-def _persist_runtime_identity() -> bool:
-    health = session.health_snapshot()
-    profile_id = str(health.get("profile_id") or "")
-    if not profile_id:
-        return True
-    account = health.get("account")
-    models = health.get("models")
-    if not isinstance(account, dict):
-        account = {}
-    if not isinstance(models, dict):
-        models = {}
-    updates: dict[str, Any] = {
-        "account": account,
-        "last_checked_at": time.time(),
-        "models": models.get("available", []),
-    }
-    try:
-        existing = control.profile(profile_id)
-    except KeyError:
-        return False
-    verified_model_ids = {
-        str(item.get("id") or "")
-        for item in updates["models"]
-        if (
-            isinstance(item, dict)
-            and item.get("available") is True
-            and item.get("access_status") == "available"
-        )
-    }
-    selected_model = str(existing.get("model") or "auto")
-    if (
-        selected_model not in {"", "auto", "claude-web"}
-        and selected_model not in verified_model_ids
-    ):
-        updates["model"] = "auto"
-    organization_uuid = session.organization_uuid_for_internal_use()
-    if organization_uuid:
-        updates["organization_id"] = organization_uuid
-    if account.get("authenticated"):
-        project = health.get("project")
-        updates["status"] = (
-            "ready"
-            if isinstance(project, dict)
-            and project.get("instructions_synced")
-            else "project_error"
-        )
-        account_uuid = session.account_uuid_for_internal_use()
-        if account_uuid:
-            fingerprint = control.account_fingerprint(
-                account_uuid
-            )
-            duplicate = control.profile_with_fingerprint(
-                fingerprint,
-                exclude_id=profile_id,
-            )
-            old_fingerprint = existing.get("account_fingerprint")
-            if duplicate is not None or (
-                old_fingerprint
-                and old_fingerprint != fingerprint
-            ):
-                updates["status"] = (
-                    "duplicate" if duplicate is not None else "account_changed"
-                )
-                try:
-                    control.update_profile(profile_id, updates)
-                except (KeyError, OSError, RuntimeError):
-                    pass
-                return False
-            updates["account_fingerprint"] = fingerprint
-    try:
-        control.update_profile(profile_id, updates)
-    except (KeyError, OSError, RuntimeError):
-        return False
-    return True
-
-
-async def _telemetry_maintenance() -> None:
-    while True:
-        await asyncio.sleep(3_600)
-        settings = control.telemetry_settings()
-        if telemetry.store is None:
-            continue
-        try:
-            if not bool(settings.get("store_content")):
-                await telemetry.store_call_async("scrub_content")
-            await telemetry.store_call_async(
-                "prune",
-                retention_days=int(
-                    settings.get("retention_days") or 30
-                ),
-                max_requests=int(
-                    settings.get("max_requests") or 5_000
-                ),
-            )
-            telemetry.storage_error = None
-        except Exception as exc:
-            telemetry.storage_error = public_error_message(exc)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     del app
-    await session.start()
-    await session.start_watchdog()
-    telemetry_settings = control.telemetry_settings()
+    await runtime.session.start()
+    await runtime.session.start_watchdog()
+    telemetry_settings = runtime.control.telemetry_settings()
     try:
         # Recovery is only safe after session.start() has acquired the
         # profile/runtime lease. A second worker must not interrupt the
         # first worker's in-flight rows.
-        await telemetry.store_call_async("recover_interrupted")
+        await runtime.telemetry.store_call_async("recover_interrupted")
         if not bool(telemetry_settings.get("store_content")):
-            await telemetry.store_call_async("scrub_content")
-        await telemetry.store_call_async(
+            await runtime.telemetry.store_call_async("scrub_content")
+        await runtime.telemetry.store_call_async(
             "prune",
             retention_days=int(
                 telemetry_settings.get("retention_days") or 30
@@ -450,19 +101,19 @@ async def lifespan(app: FastAPI):
         # panel, while the API remains available.
         pass
     telemetry_task = asyncio.create_task(
-        _telemetry_maintenance(),
+        runtime.telemetry_maintenance(),
         name="telemetry-maintenance",
     )
-    _persist_runtime_identity()
-    telemetry.log("INFO", "API", "Сервер и Camoufox запущены")
+    runtime.persist_runtime_identity()
+    runtime.telemetry.log("INFO", "API", "Сервер и Camoufox запущены")
     try:
         yield
     finally:
         telemetry_task.cancel()
         await asyncio.gather(telemetry_task, return_exceptions=True)
-        await enrollment.stop()
-        await session.stop()
-        await telemetry.close_store_executor()
+        await runtime.enrollment.stop()
+        await runtime.session.stop()
+        await runtime.telemetry.close_store_executor()
 
 
 app = FastAPI(title="Claude Web API", version="3.1.0", lifespan=lifespan)
@@ -540,13 +191,13 @@ async def control_index():
 
 @app.get("/health")
 async def health():
-    return session.health_snapshot()
+    return runtime.session.health_snapshot()
 
 
 @app.get("/health/live")
 async def health_live():
     """Event-loop liveness only; never waits for Playwright or its global lock."""
-    if not session.watchdog_healthy():
+    if not runtime.session.watchdog_healthy():
         raise HTTPException(503, "Camoufox watchdog is unhealthy")
     return {"ok": True, "watchdog": True, "time": time.time()}
 
@@ -554,7 +205,7 @@ async def health_live():
 @app.get("/health/ready")
 async def health_ready():
     """Non-blocking Camoufox readiness snapshot."""
-    snapshot = session.health_snapshot()
+    snapshot = runtime.session.health_snapshot()
     if not snapshot["ok"]:
         return JSONResponse(status_code=503, content=snapshot)
     return snapshot
@@ -563,7 +214,7 @@ async def health_ready():
 @app.post("/new")
 async def new_chat():
     try:
-        await session.new_chat()
+        await runtime.session.new_chat()
         return {"ok": True}
     except ClaudeBrowserUnavailableError as exc:
         raise HTTPException(503, str(exc)) from exc
@@ -582,7 +233,7 @@ async def chat(body: ChatIn):
         streaming=False,
     )
     try:
-        text = await session.chat(
+        text = await runtime.session.chat(
             body.message,
             timeout=body.timeout,
             new_chat=body.new_chat,
@@ -636,7 +287,7 @@ def _request_starts_fresh_chat(
     if client_session_id:
         return bool(
             body.new_chat
-            or session.client_session_requires_new(client_session_id)
+            or runtime.session.client_session_requires_new(client_session_id)
         )
     return _client_starts_fresh_chat(body)
 
@@ -736,7 +387,7 @@ def _native_tools_with_runtime(
     *,
     client_working_directory: str | None = None,
 ) -> list[dict[str, Any]]:
-    resolved_model = _resolve_request_model(body.model, profile_id)
+    resolved_model = runtime.resolve_request_model(body.model, profile_id)
     mapped_tools = native_tools(body.tools, body.tool_choice)
     runtime_context = client_runtime_context(
         body.messages,
@@ -745,7 +396,7 @@ def _native_tools_with_runtime(
     )
     selected_runtime_model = (
         resolved_model
-        or session.selected_model_for_runtime()
+        or runtime.session.selected_model_for_runtime()
     )
     runtime_context += (
         f"\nrequested_model_alias: {body.model}"
@@ -780,24 +431,24 @@ async def _native_request(
     behavior_snapshot: dict[str, Any] | None = None,
     persona_instruction: str | None = None,
 ) -> NativeTurn:
-    if not _persist_runtime_identity():
+    if not runtime.persist_runtime_identity():
         raise HTTPException(
             409,
             "the active Camoufox profile is logged into a different or "
             "duplicate account; add that account as a separate profile",
         )
-    pending_ids, recovery_required = await session.native_request_state(
+    pending_ids, recovery_required = await runtime.session.native_request_state(
         client_session_id
     )
     if pending_ids:
         if has_semantic_user_after_pending_tools(body.messages, pending_ids):
-            recovery_required = await session.abandon_pending_native(
+            recovery_required = await runtime.session.abandon_pending_native(
                 pending_ids,
                 client_session_id=client_session_id,
             )
         else:
             results = matching_tool_results(body.messages, pending_ids)
-            continued = await claude_provider.continue_with_tool_results(
+            continued = await runtime.claude_provider.continue_with_tool_results(
                 tuple(
                     ProviderToolResult(
                         tool_use_id=result.tool_call_id,
@@ -821,10 +472,10 @@ async def _native_request(
         )
 
     if behavior_snapshot is None:
-        behavior, resolved_persona = control.behavior_snapshot()
+        behavior, resolved_persona = runtime.control.behavior_snapshot()
     else:
         behavior = dict(behavior_snapshot)
-        resolved_persona = control.persona_prompt_for(behavior)
+        resolved_persona = runtime.control.persona_prompt_for(behavior)
     if persona_instruction is None:
         persona_instruction = resolved_persona
 
@@ -842,7 +493,7 @@ async def _native_request(
         fresh_chat = _request_starts_fresh_chat(
             body,
             client_session_id,
-        ) or session.privacy_mode_requires_new(
+        ) or runtime.session.privacy_mode_requires_new(
             str(behavior["privacy"])
         )
         if fresh_chat:
@@ -854,7 +505,7 @@ async def _native_request(
                     "preserving the IDE transcript supplied by the client.",
                 )
 
-    if DEBUG_REQUESTS:
+    if runtime.DEBUG_REQUESTS:
         print(
             "OPENAI_NATIVE_TURN "
             + json.dumps(
@@ -879,7 +530,7 @@ async def _native_request(
             flush=True,
         )
 
-    resolved_request_model = _resolve_request_model(body.model)
+    resolved_request_model = runtime.resolve_request_model(body.model)
     request_tools = _native_tools_with_runtime(
         body,
         client_working_directory=client_working_directory,
@@ -898,7 +549,7 @@ async def _native_request(
         recovery_message,
         persona_instruction,
     )
-    provider_turn = await claude_provider.complete_native(
+    provider_turn = await runtime.claude_provider.complete_native(
         ProviderTurnRequest(
             message=outbound_message,
             tools=tuple(request_tools),
@@ -917,7 +568,7 @@ async def _native_request(
     )
     native = _provider_turn_as_native(provider_turn)
     if recovery_required:
-        await session.mark_history_recovered()
+        await runtime.session.mark_history_recovered()
     requires_tool = body.tool_choice == "required" or isinstance(
         body.tool_choice,
         dict,
@@ -938,7 +589,7 @@ def _native_retry_kwargs(
     behavior_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if behavior_snapshot is None:
-        behavior, _ = control.behavior_snapshot()
+        behavior, _ = runtime.control.behavior_snapshot()
     else:
         behavior = dict(behavior_snapshot)
     tools = _native_tools_with_runtime(
@@ -952,7 +603,7 @@ def _native_retry_kwargs(
         "timeout": body.timeout,
         "new_chat": True,
         "parallel_tool_calls": body.parallel_tool_calls,
-        "model": _resolve_request_model(body.model, profile_id),
+        "model": runtime.resolve_request_model(body.model, profile_id),
         "thinking_mode": str(behavior["thinking"]),
         "effort": body.reasoning_effort,
         "privacy_mode": str(behavior["privacy"]),
@@ -968,7 +619,7 @@ async def _run_native_with_limits(
     client_working_directory: str | None = None,
     event_sink: Callable[[dict[str, Any]], None] | None,
 ) -> NativeTurn:
-    behavior, persona_instruction = control.behavior_snapshot()
+    behavior, persona_instruction = runtime.control.behavior_snapshot()
     try:
         return await _native_request(
             body,
@@ -997,14 +648,14 @@ async def _run_native_with_limits(
                 retry_message,
                 persona_instruction,
             )
-            return await session.native_chat(
+            return await runtime.session.native_chat(
                 retry_message,
                 recovery_message=retry_message,
                 **_native_retry_kwargs(
                     body,
                     client_session_id,
                     event_sink,
-                    session.current_profile_id(),
+                    runtime.session.current_profile_id(),
                     client_working_directory,
                     behavior,
                 ),
@@ -1049,11 +700,11 @@ async def _rotate_after_usage_limit(
             "Claude reported an account limit after output or a tool path "
             "had already started; profile rotation did not replay it.",
         ) from limit_error
-    current_id = session.current_profile_id()
+    current_id = runtime.session.current_profile_id()
     rotation_succeeded = False
     try:
         try:
-            control.update_profile(
+            runtime.control.update_profile(
                 current_id,
                 {
                     "status": "limited",
@@ -1062,18 +713,18 @@ async def _rotate_after_usage_limit(
             )
         except KeyError:
             pass
-        eligible = _eligible_rotation_ids()
+        eligible = runtime.eligible_rotation_ids()
         eligible.discard(current_id)
         attempts = len(eligible)
         for _ in range(attempts):
             try:
-                if not await session.rotate_profile(eligible):
+                if not await runtime.session.rotate_profile(eligible):
                     break
             except ClaudeBrowserUnavailableError as rotate_exc:
-                failed_id = session.current_profile_id()
+                failed_id = runtime.session.current_profile_id()
                 eligible.discard(failed_id)
                 try:
-                    control.update_profile(
+                    runtime.control.update_profile(
                         failed_id,
                         {
                             "status": "error",
@@ -1082,16 +733,16 @@ async def _rotate_after_usage_limit(
                     )
                 except KeyError:
                     pass
-                telemetry.log(
+                runtime.telemetry.log(
                     "WARN",
                     "Profiles",
                     f"Профиль {failed_id} пропущен: {rotate_exc}",
                 )
                 continue
-            candidate_id = session.current_profile_id()
-            if not _persist_runtime_identity():
+            candidate_id = runtime.session.current_profile_id()
+            if not runtime.persist_runtime_identity():
                 eligible.discard(candidate_id)
-                telemetry.log(
+                runtime.telemetry.log(
                     "WARN",
                     "Profiles",
                     f"Профиль {candidate_id} использует другой или "
@@ -1099,11 +750,11 @@ async def _rotate_after_usage_limit(
                 )
                 continue
             try:
-                control.set_active_profile(candidate_id)
+                runtime.control.set_active_profile(candidate_id)
             except Exception as commit_exc:
                 try:
-                    await session.sync_profiles(
-                        _runtime_profiles(),
+                    await runtime.session.sync_profiles(
+                        runtime.runtime_profiles(),
                         current_id,
                         restart=True,
                     )
@@ -1124,7 +775,7 @@ async def _rotate_after_usage_limit(
                     retry_message,
                     persona_instruction,
                 )
-                native = await session.native_chat(
+                native = await runtime.session.native_chat(
                     retry_message,
                     recovery_message=retry_message,
                     **_native_retry_kwargs(
@@ -1136,8 +787,8 @@ async def _rotate_after_usage_limit(
                         behavior_snapshot,
                     ),
                 )
-                _persist_runtime_identity()
-                telemetry.log(
+                runtime.persist_runtime_identity()
+                runtime.telemetry.log(
                     "WARN",
                     "Profiles",
                     "Профиль автоматически сменён после лимита",
@@ -1156,7 +807,7 @@ async def _rotate_after_usage_limit(
                         "was not replayed again.",
                     ) from alternate_limit
                 try:
-                    control.update_profile(
+                    runtime.control.update_profile(
                         candidate_id,
                         {
                             "status": "limited",
@@ -1169,7 +820,7 @@ async def _rotate_after_usage_limit(
                 continue
             except ValueError as candidate_exc:
                 eligible.discard(candidate_id)
-                telemetry.log(
+                runtime.telemetry.log(
                     "WARN",
                     "Models",
                     f"Профиль {candidate_id} не подходит: {candidate_exc}",
@@ -1177,15 +828,15 @@ async def _rotate_after_usage_limit(
                 continue
             except ClaudeAccountIdentityError as candidate_exc:
                 eligible.discard(candidate_id)
-                _persist_runtime_identity()
-                telemetry.log(
+                runtime.persist_runtime_identity()
+                runtime.telemetry.log(
                     "WARN",
                     "Profiles",
                     f"Профиль {candidate_id} сменил аккаунт: {candidate_exc}",
                 )
                 continue
             except ClaudeBrowserUnavailableError as candidate_exc:
-                health = session.health_snapshot()
+                health = runtime.session.health_snapshot()
                 browser = health.get("browser", {})
                 status = (
                     "auth_required"
@@ -1194,7 +845,7 @@ async def _rotate_after_usage_limit(
                     else "error"
                 )
                 try:
-                    control.update_profile(
+                    runtime.control.update_profile(
                         candidate_id,
                         {
                             "status": status,
@@ -1204,7 +855,7 @@ async def _rotate_after_usage_limit(
                 except KeyError:
                     pass
                 eligible.discard(candidate_id)
-                telemetry.log(
+                runtime.telemetry.log(
                     "WARN",
                     "Profiles",
                     f"Профиль {candidate_id} пропущен: {candidate_exc}",
@@ -1218,14 +869,14 @@ async def _rotate_after_usage_limit(
     finally:
         if not rotation_succeeded:
             try:
-                await session.sync_profiles(
-                    _runtime_profiles(),
+                await runtime.session.sync_profiles(
+                    runtime.runtime_profiles(),
                     current_id,
                     restart=True,
                 )
-                control.set_active_profile(current_id)
+                runtime.control.set_active_profile(current_id)
             except Exception as restore_exc:
-                telemetry.log(
+                runtime.telemetry.log(
                     "ERROR",
                     "Profiles",
                     f"Не удалось вернуть профиль {current_id}: {restore_exc}",
@@ -1237,8 +888,8 @@ async def _rotate_after_usage_limit(
 
 
 def _telemetry_content_enabled() -> bool:
-    settings = control.telemetry_settings()
-    privacy_mode = str(control.behavior().get("privacy") or "keep")
+    settings = runtime.control.telemetry_settings()
+    privacy_mode = str(runtime.control.behavior().get("privacy") or "keep")
     return bool(settings.get("store_content")) and privacy_mode != "ephemeral"
 
 
@@ -1259,15 +910,15 @@ def _begin_request_telemetry(
     *,
     streaming: bool,
 ) -> None:
-    privacy_mode = str(control.behavior().get("privacy") or "keep")
-    profile_id = session.current_profile_id()
-    telemetry.begin(
+    privacy_mode = str(runtime.control.behavior().get("privacy") or "keep")
+    profile_id = runtime.session.current_profile_id()
+    runtime.telemetry.begin(
         request_id,
         model,
         profile_id,
-        provider_id=_profile_provider_id(profile_id),
+        provider_id=runtime.profile_provider_id(profile_id),
         client_session_id=client_session_id,
-        session_key=control.telemetry_session_key(
+        session_key=runtime.control.telemetry_session_key(
             client_session_id,
             request_id,
         ),
@@ -1288,7 +939,7 @@ def _finish_request_telemetry(
     assistant_text: str | None = None,
     resolved_model: str | None = None,
 ) -> None:
-    settings = control.telemetry_settings()
+    settings = runtime.control.telemetry_settings()
     parsed = _parsed_native(native) if native is not None else None
     if native is not None:
         if usage is None:
@@ -1296,7 +947,7 @@ def _finish_request_telemetry(
         if assistant_text is None:
             assistant_text = native.content
         resolved_model = native.model or resolved_model
-    telemetry.finish(
+    runtime.telemetry.finish(
         request_id,
         status=status,
         usage=usage,
@@ -1305,16 +956,16 @@ def _finish_request_telemetry(
         thinking_text=native.thinking if native is not None else None,
         tool_call_count=len(parsed.tool_calls) if parsed is not None else 0,
         resolved_model=resolved_model,
-        final_profile_id=session.current_profile_id(),
-        final_provider_id=_profile_provider_id(
-            session.current_profile_id()
+        final_profile_id=runtime.session.current_profile_id(),
+        final_provider_id=runtime.profile_provider_id(
+            runtime.session.current_profile_id()
         ),
         capture_content=_telemetry_content_enabled(),
         retention_days=int(settings.get("retention_days") or 30),
         max_requests=int(settings.get("max_requests") or 5_000),
     )
     if status == "error" and error:
-        telemetry.log(
+        runtime.telemetry.log(
             "ERROR",
             "API",
             sanitize_public_text(error),
@@ -1324,7 +975,7 @@ def _finish_request_telemetry(
 
 def _assistant_message(turn: NativeTurn) -> dict[str, Any]:
     message = chat_message(_parsed_native(turn))
-    if turn.thinking and control.behavior()["thinking"] != "off":
+    if turn.thinking and runtime.control.behavior()["thinking"] != "off":
         message["reasoning_content"] = turn.thinking
     return message
 
@@ -1354,7 +1005,11 @@ def _completion_response(
         "id": completion_id,
         "object": "chat.completion",
         "created": created,
-        "model": native.model or _resolve_request_model(body.model) or body.model,
+        "model": (
+            native.model
+            or runtime.resolve_request_model(body.model)
+            or body.model
+        ),
         "choices": [
             {
                 "index": 0,
@@ -1378,7 +1033,7 @@ class StreamRelay:
     def __call__(self, event: dict[str, Any]) -> None:
         if event.get("type") in {"text_delta", "thinking_delta"}:
             self.visible_seen = True
-        telemetry.native_event(self.request_id, event)
+        runtime.telemetry.native_event(self.request_id, event)
         self.queue.put_nowait(dict(event))
 
 
@@ -1519,7 +1174,7 @@ async def _chat_event_stream(
                     )
             elif (
                 event_type == "thinking_delta"
-                and control.behavior()["thinking"] != "off"
+                and runtime.control.behavior()["thinking"] != "off"
             ):
                 thinking = str(event.get("thinking") or "")
                 if thinking:
@@ -1540,7 +1195,7 @@ async def _chat_event_stream(
         native = await task
         resolved_model = (
             native.model
-            or _resolve_request_model(body.model)
+            or runtime.resolve_request_model(body.model)
             or resolved_model
         )
         if native.content:
@@ -1566,7 +1221,7 @@ async def _chat_event_stream(
                 )
         if (
             native.thinking
-            and control.behavior()["thinking"] != "off"
+            and runtime.control.behavior()["thinking"] != "off"
             and not emitted_thinking
         ):
             yield _chat_chunk(
@@ -1610,7 +1265,7 @@ async def _chat_event_stream(
             usage=usage,
             resolved_model=resolved_model,
         )
-        telemetry.log(
+        runtime.telemetry.log(
             "INFO",
             "API",
             f"POST /v1/chat/completions завершён ({resolved_model})",
@@ -1648,7 +1303,7 @@ async def _chat_event_stream(
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         if isinstance(exc, ClaudeAccountIdentityError):
-            _persist_runtime_identity()
+            runtime.persist_runtime_identity()
         safe_error = public_error_message(exc)
         _finish_request_telemetry(
             request_id,
@@ -1664,7 +1319,7 @@ async def _chat_event_stream(
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         if (
-            telemetry.has_active(request_id)
+            runtime.telemetry.has_active(request_id)
         ):
             _finish_request_telemetry(
                 request_id,
@@ -1680,7 +1335,7 @@ async def _completed_event_stream(
     model: str,
 ):
     yield _chat_chunk(completion_id, created, model, {"role": "assistant"})
-    if native.thinking and control.behavior()["thinking"] != "off":
+    if native.thinking and runtime.control.behavior()["thinking"] != "off":
         yield _chat_chunk(
             completion_id,
             created,
@@ -1794,8 +1449,8 @@ async def openai_compat(
     )
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
-    model = _resolve_request_model(body.model) or body.model
-    behavior = control.behavior()
+    model = runtime.resolve_request_model(body.model) or body.model
+    behavior = runtime.control.behavior()
     if body.stream and behavior["streaming"]:
         return StreamingResponse(
             _chat_event_stream(
@@ -1836,7 +1491,7 @@ async def openai_compat(
             usage=usage,
             resolved_model=resolved_model,
         )
-        telemetry.log(
+        runtime.telemetry.log(
             "INFO",
             "API",
             f"POST /v1/chat/completions завершён ({resolved_model})",
@@ -1873,7 +1528,7 @@ async def openai_compat(
         )
         raise HTTPException(409, str(exc)) from exc
     except ClaudeAccountIdentityError as exc:
-        _persist_runtime_identity()
+        runtime.persist_runtime_identity()
         _finish_request_telemetry(
             request_id,
             status="error",
@@ -1928,7 +1583,7 @@ async def list_models():
         }
     ]
     known = {"claude-web"}
-    for item in session.selectable_models():
+    for item in runtime.session.selectable_models():
         if item.get("access_status") != "available":
             continue
         model_id = str(item["id"])
@@ -1948,11 +1603,11 @@ async def list_models():
 
 @app.get("/api/control/state")
 async def control_state():
-    snapshot = control.snapshot()
+    snapshot = runtime.control.snapshot()
     persona_compilation = ControlConfig.persona_compilation_for(
         snapshot.get("behavior", {}),
     )
-    health = session.health_snapshot()
+    health = runtime.session.health_snapshot()
     for profile in snapshot["profiles"]:
         if profile["id"] == health.get("profile_id"):
             profile["runtime"] = {
@@ -1965,22 +1620,22 @@ async def control_state():
         "config": snapshot,
         "persona_compilation": persona_compilation,
         "health": health,
-        "providers": _provider_capabilities_snapshot(),
-        "activity": telemetry.snapshot(),
+        "providers": runtime.provider_capabilities_snapshot(),
+        "activity": runtime.telemetry.snapshot(),
         "server": {
             "version": app.version,
             "port": int(os.getenv("PORT", "8765")),
             "project_root": str(PROJECT_ROOT),
             "working_directory": os.getcwd(),
             "streaming_is_live": bool(
-                control.behavior().get("streaming")
+                runtime.control.behavior().get("streaming")
             ),
             "thinking_note": (
                 "Claude Web exposes provider summaries when available; "
                 "hidden chain-of-thought is never fabricated or leaked."
             ),
         },
-        "protocol": session.last_completion_shape(),
+        "protocol": runtime.session.last_completion_shape(),
     }
 
 
@@ -2011,13 +1666,13 @@ def _telemetry_since(period: str) -> float | None:
 
 
 def _persistent_telemetry_store() -> TelemetryStore:
-    if telemetry.store is None:
+    if runtime.telemetry.store is None:
         raise HTTPException(
             503,
-            telemetry.storage_error
+            runtime.telemetry.storage_error
             or "persistent telemetry storage is unavailable",
         )
-    return telemetry.store
+    return runtime.telemetry.store
 
 
 @app.get("/api/control/telemetry")
@@ -2041,7 +1696,7 @@ async def control_telemetry(
         raise HTTPException(400, "unsupported event level")
     _persistent_telemetry_store()
     try:
-        requests, total = await telemetry.store_call_async(
+        requests, total = await runtime.telemetry.store_call_async(
             "list_requests",
             since=since,
             status=(
@@ -2054,7 +1709,7 @@ async def control_telemetry(
             limit=limit,
             offset=offset,
         )
-        summary = await telemetry.store_call_async(
+        summary = await runtime.telemetry.store_call_async(
             "summary",
             since=since,
             provider_id=provider_id or None,
@@ -2062,7 +1717,7 @@ async def control_telemetry(
             model=model or None,
             search=q or None,
         )
-        events, event_total = await telemetry.store_call_async(
+        events, event_total = await runtime.telemetry.store_call_async(
             "list_events",
             since=since,
             level=(
@@ -2072,14 +1727,14 @@ async def control_telemetry(
             limit=limit,
             offset=offset,
         )
-        telemetry.storage_error = None
+        runtime.telemetry.storage_error = None
     except Exception as exc:
-        telemetry.storage_error = public_error_message(exc)
+        runtime.telemetry.storage_error = public_error_message(exc)
         raise HTTPException(
             503,
             "persistent telemetry query failed",
         ) from exc
-    settings = control.telemetry_settings()
+    settings = runtime.control.telemetry_settings()
     payload = {
         "period": period,
         "summary": summary,
@@ -2101,7 +1756,7 @@ async def control_telemetry(
             **settings,
             "content_effective": _telemetry_content_enabled(),
             "ephemeral_suppresses_content": (
-                str(control.behavior().get("privacy") or "keep")
+                str(runtime.control.behavior().get("privacy") or "keep")
                 == "ephemeral"
             ),
         },
@@ -2121,20 +1776,20 @@ async def update_telemetry_settings(body: TelemetryPatch):
     }
     _persistent_telemetry_store()
     try:
-        settings = control.update_telemetry(updates)
+        settings = runtime.control.update_telemetry(updates)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(400, str(exc)) from exc
     try:
         if updates.get("store_content") is False:
-            await telemetry.store_call_async("scrub_content")
-        await telemetry.store_call_async(
+            await runtime.telemetry.store_call_async("scrub_content")
+        await runtime.telemetry.store_call_async(
             "prune",
             retention_days=int(settings["retention_days"]),
             max_requests=int(settings["max_requests"]),
         )
-        telemetry.storage_error = None
+        runtime.telemetry.storage_error = None
     except Exception as exc:
-        telemetry.storage_error = public_error_message(exc)
+        runtime.telemetry.storage_error = public_error_message(exc)
         return JSONResponse(
             status_code=503,
             content={
@@ -2149,7 +1804,7 @@ async def update_telemetry_settings(body: TelemetryPatch):
                 "cleanup_pending": True,
             },
         )
-    telemetry.log(
+    runtime.telemetry.log(
         "INFO",
         "Telemetry",
         "Настройки локальной истории обновлены",
@@ -2166,13 +1821,13 @@ async def update_telemetry_settings(body: TelemetryPatch):
 @app.delete("/api/control/telemetry")
 async def clear_control_telemetry():
     _persistent_telemetry_store()
-    telemetry.events.clear()
-    telemetry.last = None
+    runtime.telemetry.events.clear()
+    runtime.telemetry.last = None
     try:
-        await telemetry.store_call_async("clear_all")
+        await runtime.telemetry.store_call_async("clear_all")
     except Exception:
         raise HTTPException(503, "could not clear persistent telemetry") from None
-    if telemetry.storage_error:
+    if runtime.telemetry.storage_error:
         raise HTTPException(503, "could not clear persistent telemetry")
     return {"ok": True}
 
@@ -2183,12 +1838,12 @@ async def control_telemetry_request(request_id: str):
         raise HTTPException(400, "invalid request id")
     _persistent_telemetry_store()
     try:
-        item = await telemetry.store_call_async(
+        item = await runtime.telemetry.store_call_async(
             "request_detail",
             request_id.removeprefix("chatcmpl-"),
         )
     except Exception as exc:
-        telemetry.storage_error = public_error_message(exc)
+        runtime.telemetry.storage_error = public_error_message(exc)
         raise HTTPException(
             503,
             "persistent telemetry query failed",
@@ -2209,10 +1864,10 @@ async def update_behavior(body: BehaviorPatch):
         if value is not None
     }
     try:
-        behavior = control.update_behavior(updates)
+        behavior = runtime.control.update_behavior(updates)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(400, str(exc)) from exc
-    telemetry.log("INFO", "Settings", "Настройки поведения обновлены")
+    runtime.telemetry.log("INFO", "Settings", "Настройки поведения обновлены")
     return {
         "ok": True,
         "behavior": behavior,
@@ -2225,11 +1880,11 @@ async def update_behavior(body: BehaviorPatch):
 @app.post("/api/control/profiles")
 async def create_profile(body: ProfileCreate):
     try:
-        profile = control.create_profile(body.name, body.provider)
-        _bind_claude_profile_route(profile)
+        profile = runtime.control.create_profile(body.name, body.provider)
+        runtime.bind_claude_profile_route(profile)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    telemetry.log(
+    runtime.telemetry.log(
         "INFO",
         "Profiles",
         f"Создан профиль «{profile['name']}»; требуется вход",
@@ -2240,29 +1895,29 @@ async def create_profile(body: ProfileCreate):
 @app.post("/api/control/profiles/{profile_id}/login")
 async def launch_profile_login(profile_id: str):
     try:
-        profile = control.profile(profile_id)
+        profile = runtime.control.profile(profile_id)
     except KeyError as exc:
         raise HTTPException(404, "profile not found") from exc
-    if _is_active_claude_profile(profile):
-        health = session.health_snapshot()
+    if runtime.is_active_claude_profile(profile):
+        health = runtime.session.health_snapshot()
         browser = health.get("browser", {})
         if (
             isinstance(browser, dict)
             and browser.get("phase")
             in {"auth_required", "account_unknown", "account_changed"}
         ):
-            if HEADLESS and session.headless:
-                session.headless = False
-                await session.sync_profiles(
-                    _runtime_profiles(),
+            if runtime.HEADLESS and runtime.session.headless:
+                runtime.session.headless = False
+                await runtime.session.sync_profiles(
+                    runtime.runtime_profiles(),
                     profile_id,
                     restart=True,
                 )
-                await session.start_watchdog()
+                await runtime.session.start_watchdog()
             else:
-                await session.bring_to_front()
-            control.update_profile(profile_id, {"status": "auth_pending"})
-            telemetry.log(
+                await runtime.session.bring_to_front()
+            runtime.control.update_profile(profile_id, {"status": "auth_pending"})
+            runtime.telemetry.log(
                 "INFO",
                 "Profiles",
                 f"Открыт Camoufox для повторного входа в профиль «{profile['name']}»",
@@ -2283,13 +1938,13 @@ async def launch_profile_login(profile_id: str):
             "the active Camoufox profile is already open and authenticated",
         )
     try:
-        state = await enrollment.launch(
+        state = await runtime.enrollment.launch(
             profile_id,
             profile["path"],
             str(profile.get("provider") or CLAUDE_WEB_PROVIDER_ID),
         )
-        control.update_profile(profile_id, {"status": "auth_pending"})
-        if profile.get("provider") == GROK_WEB_PROVIDER_ID:
+        runtime.control.update_profile(profile_id, {"status": "auth_pending"})
+        if profile.get("provider") == runtime.GROK_WEB_PROVIDER_ID:
             log_message = (
                 "Открыто диагностическое окно Playwright Chrome для проверки "
                 f"доступа профиля «{profile['name']}»"
@@ -2298,43 +1953,43 @@ async def launch_profile_login(profile_id: str):
             log_message = (
                 f"Открыт Camoufox для входа в профиль «{profile['name']}»"
             )
-        telemetry.log(
+        runtime.telemetry.log(
             "INFO",
             "Profiles",
             log_message,
         )
         return {"ok": True, "login": state}
     except Exception as exc:
-        control.update_profile(profile_id, {"status": "error"})
+        runtime.control.update_profile(profile_id, {"status": "error"})
         raise HTTPException(500, str(exc)) from exc
 
 
 @app.get("/api/control/profiles/{profile_id}/login")
 async def inspect_profile_login(profile_id: str):
-    task = profile_login_tasks.get(profile_id)
+    task = runtime.profile_login_tasks.get(profile_id)
     if task is None or task.done():
         task = asyncio.create_task(
             _inspect_profile_login_once(profile_id),
             name=f"profile-login-{profile_id}",
         )
-        profile_login_tasks[profile_id] = task
+        runtime.profile_login_tasks[profile_id] = task
     try:
         return await asyncio.shield(task)
     finally:
-        if profile_login_tasks.get(profile_id) is task and task.done():
-            profile_login_tasks.pop(profile_id, None)
+        if runtime.profile_login_tasks.get(profile_id) is task and task.done():
+            runtime.profile_login_tasks.pop(profile_id, None)
 
 
 async def _inspect_profile_login_once(profile_id: str):
     try:
-        profile = control.profile(profile_id)
+        profile = runtime.control.profile(profile_id)
     except KeyError as exc:
         raise HTTPException(404, "profile not found") from exc
     provider_id = str(
         profile.get("provider") or CLAUDE_WEB_PROVIDER_ID
     )
-    active_claude_profile = _is_active_claude_profile(profile)
-    login_running = await enrollment.is_running(profile_id)
+    active_claude_profile = runtime.is_active_claude_profile(profile)
+    login_running = await runtime.enrollment.is_running(profile_id)
     if (
         provider_id != CLAUDE_WEB_PROVIDER_ID
         and not login_running
@@ -2343,7 +1998,7 @@ async def _inspect_profile_login_once(profile_id: str):
         # A browser login is not sufficient to make an experimental provider
         # executable. Normalize stale/legacy "ready" rows to the fail-closed
         # state and never expose them as an activatable completion profile.
-        control.update_profile(
+        runtime.control.update_profile(
             profile_id,
             {
                 "status": "protocol_unverified",
@@ -2351,10 +2006,10 @@ async def _inspect_profile_login_once(profile_id: str):
                 "last_checked_at": time.time(),
             },
         )
-        profile = control.profile(profile_id)
+        profile = runtime.control.profile(profile_id)
         public_profile = next(
             row
-            for row in control.snapshot()["profiles"]
+            for row in runtime.control.snapshot()["profiles"]
             if row["id"] == profile_id
         )
         return {
@@ -2386,7 +2041,7 @@ async def _inspect_profile_login_once(profile_id: str):
     ):
         public_profile = next(
             row
-            for row in control.snapshot()["profiles"]
+            for row in runtime.control.snapshot()["profiles"]
             if row["id"] == profile_id
         )
         return {
@@ -2424,7 +2079,7 @@ async def _inspect_profile_login_once(profile_id: str):
         active_claude_profile
         and not login_running
     ):
-        health = session.health_snapshot()
+        health = runtime.session.health_snapshot()
         account = health.get("account")
         models = health.get("models")
         if not isinstance(account, dict):
@@ -2444,7 +2099,7 @@ async def _inspect_profile_login_once(profile_id: str):
             "models": models.get("available", []),
         }
         if authenticated:
-            identity_ok = _persist_runtime_identity()
+            identity_ok = runtime.persist_runtime_identity()
             if not identity_ok:
                 result["status"] = "account_changed"
                 result["ready"] = False
@@ -2452,18 +2107,18 @@ async def _inspect_profile_login_once(profile_id: str):
                     "This browser is logged into another or duplicate "
                     "account. Add it as a separate profile."
                 )
-            elif HEADLESS and not session.headless:
-                session.headless = True
-                await session.sync_profiles(
-                    _runtime_profiles(),
+            elif runtime.HEADLESS and not runtime.session.headless:
+                runtime.session.headless = True
+                await runtime.session.sync_profiles(
+                    runtime.runtime_profiles(),
                     profile_id,
                     restart=True,
                 )
-                await session.start_watchdog()
+                await runtime.session.start_watchdog()
                 result["browser_open"] = False
                 result["active_browser"] = True
         else:
-            control.update_profile(
+            runtime.control.update_profile(
                 profile_id,
                 {
                     "status": "auth_pending",
@@ -2471,7 +2126,7 @@ async def _inspect_profile_login_once(profile_id: str):
                 },
             )
         return {"ok": True, "login": result}
-    result = await enrollment.inspect(profile_id)
+    result = await runtime.enrollment.inspect(profile_id)
     if not result.get("authenticated"):
         observed_status = str(result.get("status") or "checking")
         if observed_status in {"provider_blocked", "access_denied"}:
@@ -2485,7 +2140,7 @@ async def _inspect_profile_login_once(profile_id: str):
             persisted_status = "auth_required"
         else:
             persisted_status = "auth_pending"
-        control.update_profile(
+        runtime.control.update_profile(
             profile_id,
             {
                 "status": persisted_status,
@@ -2494,10 +2149,10 @@ async def _inspect_profile_login_once(profile_id: str):
         )
         result["ready"] = False
         return {"ok": True, "login": result}
-    identity = await enrollment.internal_identity(profile_id)
+    identity = await runtime.enrollment.internal_identity(profile_id)
     account_uuid = str(identity.get("account_uuid") or "")
     if not account_uuid:
-        control.update_profile(
+        runtime.control.update_profile(
             profile_id,
             {
                 "status": "auth_pending",
@@ -2524,13 +2179,13 @@ async def _inspect_profile_login_once(profile_id: str):
         if provider_id == CLAUDE_WEB_PROVIDER_ID
         else f"{provider_id}:{account_uuid}"
     )
-    fingerprint = control.account_fingerprint(fingerprint_source)
-    duplicate = control.claim_account_fingerprint(
+    fingerprint = runtime.control.account_fingerprint(fingerprint_source)
+    duplicate = runtime.control.claim_account_fingerprint(
         profile_id,
         fingerprint,
     )
     if duplicate is not None:
-        control.update_profile(
+        runtime.control.update_profile(
             profile_id,
             {
                 "status": "duplicate",
@@ -2539,21 +2194,21 @@ async def _inspect_profile_login_once(profile_id: str):
                 "last_checked_at": time.time(),
             },
         )
-        await enrollment.finish(profile_id)
+        await runtime.enrollment.finish(profile_id)
         result["status"] = "duplicate"
         result["ready"] = False
         result["duplicate"] = {
             "profile_id": duplicate["id"],
             "name": duplicate["name"],
         }
-        telemetry.log(
+        runtime.telemetry.log(
             "WARN",
             "Profiles",
             f"Профиль «{profile['name']}» использует уже добавленный аккаунт",
         )
         return {"ok": True, "login": result}
     if provider_id != CLAUDE_WEB_PROVIDER_ID:
-        control.update_profile(
+        runtime.control.update_profile(
             profile_id,
             {
                 "status": "protocol_unverified",
@@ -2564,7 +2219,7 @@ async def _inspect_profile_login_once(profile_id: str):
                 "last_checked_at": time.time(),
             },
         )
-        await enrollment.finish(profile_id)
+        await runtime.enrollment.finish(profile_id)
         result["status"] = "protocol_unverified"
         result["ready"] = False
         result["protocol_error"] = (
@@ -2574,10 +2229,10 @@ async def _inspect_profile_login_once(profile_id: str):
         )
         result["profile"] = next(
             row
-            for row in control.snapshot()["profiles"]
+            for row in runtime.control.snapshot()["profiles"]
             if row["id"] == profile_id
         )
-        telemetry.log(
+        runtime.telemetry.log(
             "WARN",
             "Profiles",
             (
@@ -2593,9 +2248,9 @@ async def _inspect_profile_login_once(profile_id: str):
             if provider_id == CLAUDE_WEB_PROVIDER_ID
             else ""
         )
-        project = await enrollment.ensure_project(profile_id, instructions)
+        project = await runtime.enrollment.ensure_project(profile_id, instructions)
     except Exception as exc:
-        control.update_profile(
+        runtime.control.update_profile(
             profile_id,
             {
                 "status": "project_setup_error",
@@ -2610,8 +2265,8 @@ async def _inspect_profile_login_once(profile_id: str):
         result["ready"] = False
         result["project_error"] = public_error_message(exc)
         return {"ok": True, "login": result}
-    identity = await enrollment.internal_identity(profile_id)
-    control.update_profile(
+    identity = await runtime.enrollment.internal_identity(profile_id)
+    runtime.control.update_profile(
         profile_id,
         {
             "status": "ready",
@@ -2624,15 +2279,15 @@ async def _inspect_profile_login_once(profile_id: str):
             "last_checked_at": time.time(),
         },
     )
-    await enrollment.finish(profile_id)
+    await runtime.enrollment.finish(profile_id)
     if provider_id == CLAUDE_WEB_PROVIDER_ID:
-        await session.sync_profiles(
-            _runtime_profiles(),
-            _provider_profile_id(CLAUDE_WEB_PROVIDER_ID),
+        await runtime.session.sync_profiles(
+            runtime.runtime_profiles(),
+            runtime.provider_profile_id(CLAUDE_WEB_PROVIDER_ID),
         )
     public_profile = next(
         row
-        for row in control.snapshot()["profiles"]
+        for row in runtime.control.snapshot()["profiles"]
         if row["id"] == profile_id
     )
     result["status"] = "ready"
@@ -2651,7 +2306,7 @@ async def _inspect_profile_login_once(profile_id: str):
             "status": "not_required",
         }
     result["profile"] = public_profile
-    telemetry.log(
+    runtime.telemetry.log(
         "INFO",
         "Profiles",
         f"Профиль «{profile['name']}» авторизован и готов",
@@ -2662,38 +2317,38 @@ async def _inspect_profile_login_once(profile_id: str):
 @app.delete("/api/control/profiles/{profile_id}/login")
 async def cancel_profile_login(profile_id: str):
     try:
-        profile = control.profile(profile_id)
+        profile = runtime.control.profile(profile_id)
     except KeyError as exc:
         raise HTTPException(404, "profile not found") from exc
-    finalize_task = profile_login_tasks.pop(profile_id, None)
+    finalize_task = runtime.profile_login_tasks.pop(profile_id, None)
     if finalize_task is not None and not finalize_task.done():
         finalize_task.cancel()
         await asyncio.gather(finalize_task, return_exceptions=True)
-    if not await enrollment.is_running(profile_id):
+    if not await runtime.enrollment.is_running(profile_id):
         if (
-            _is_active_claude_profile(profile)
-            and HEADLESS
-            and not session.headless
+            runtime.is_active_claude_profile(profile)
+            and runtime.HEADLESS
+            and not runtime.session.headless
         ):
-            session.headless = True
-            await session.sync_profiles(
-                _runtime_profiles(),
+            runtime.session.headless = True
+            await runtime.session.sync_profiles(
+                runtime.runtime_profiles(),
                 profile_id,
                 restart=True,
             )
-            await session.start_watchdog()
-            control.update_profile(profile_id, {"status": "auth_required"})
+            await runtime.session.start_watchdog()
+            runtime.control.update_profile(profile_id, {"status": "auth_required"})
             return {"ok": True, "cancelled": True}
         return {"ok": True, "cancelled": False}
-    await enrollment.finish(profile_id)
-    control.update_profile(profile_id, {"status": "auth_required"})
+    await runtime.enrollment.finish(profile_id)
+    runtime.control.update_profile(profile_id, {"status": "auth_required"})
     return {"ok": True, "cancelled": True}
 
 
 @app.post("/api/control/profiles/{profile_id}/activate")
 async def activate_profile(profile_id: str):
     try:
-        profile = control.profile(profile_id)
+        profile = runtime.control.profile(profile_id)
     except KeyError as exc:
         raise HTTPException(404, "profile not found") from exc
     if (
@@ -2710,64 +2365,64 @@ async def activate_profile(profile_id: str):
             "Grok Web cannot be activated until its authenticated Chrome "
             "stream protocol has been verified.",
         )
-    _bind_claude_profile_route(profile)
+    runtime.bind_claude_profile_route(profile)
     limited_until = profile.get("limited_until")
     if isinstance(limited_until, (int, float)) and limited_until > time.time():
         raise HTTPException(
             409,
             "profile is temporarily limited and cannot be activated yet",
         )
-    native_state = session.health_snapshot().get("native", {})
+    native_state = runtime.session.health_snapshot().get("native", {})
     if isinstance(native_state, dict) and native_state.get("active"):
         raise HTTPException(
             409,
             "cannot switch profile while Claude is waiting for tool_result",
         )
-    old_profile_id = control.snapshot()["active_profile"]
-    runtime_profiles = _runtime_profiles()
+    old_profile_id = runtime.control.snapshot()["active_profile"]
+    runtime_profiles = runtime.runtime_profiles()
     try:
-        await session.sync_profiles(
+        await runtime.session.sync_profiles(
             runtime_profiles,
             profile_id,
             restart=True,
         )
-        if not session.health_snapshot().get("ok"):
+        if not runtime.session.health_snapshot().get("ok"):
             raise RuntimeError(
                 "target profile requires authentication or account verification"
             )
-        control.set_active_profile(profile_id)
-        if not _persist_runtime_identity():
+        runtime.control.set_active_profile(profile_id)
+        if not runtime.persist_runtime_identity():
             raise RuntimeError(
                 "target profile is logged into a different or duplicate account"
             )
     except Exception as exc:
         if old_profile_id != profile_id:
             try:
-                await session.sync_profiles(
+                await runtime.session.sync_profiles(
                     runtime_profiles,
                     old_profile_id,
                     restart=True,
                 )
-                control.set_active_profile(old_profile_id)
+                runtime.control.set_active_profile(old_profile_id)
             except Exception as rollback_exc:
-                telemetry.log(
+                runtime.telemetry.log(
                     "ERROR",
                     "Profiles",
                     f"Не удалось вернуть предыдущий профиль: {rollback_exc}",
                 )
         raise HTTPException(503, str(exc)) from exc
-    telemetry.log(
+    runtime.telemetry.log(
         "INFO",
         "Profiles",
         f"Активирован профиль «{profile['name']}»",
     )
-    return {"ok": True, "health": session.health_snapshot()}
+    return {"ok": True, "health": runtime.session.health_snapshot()}
 
 
 @app.post("/api/control/profiles/{profile_id}/model")
 async def select_profile_model(profile_id: str, body: ModelSelect):
     try:
-        profile = control.profile(profile_id)
+        profile = runtime.control.profile(profile_id)
     except KeyError as exc:
         raise HTTPException(404, "profile not found") from exc
     available = {
@@ -2781,7 +2436,7 @@ async def select_profile_model(profile_id: str, body: ModelSelect):
     }
     provider_alias = (
         "grok-web"
-        if profile.get("provider") == GROK_WEB_PROVIDER_ID
+        if profile.get("provider") == runtime.GROK_WEB_PROVIDER_ID
         else "claude-web"
     )
     if body.model not in {"auto", provider_alias}:
@@ -2795,14 +2450,14 @@ async def select_profile_model(profile_id: str, body: ModelSelect):
                 400,
                 "model is not available to this authenticated account",
             )
-    updated = control.update_profile(profile_id, {"model": body.model})
-    if profile_id == session.current_profile_id():
-        await session.sync_profiles(
-            _runtime_profiles(),
+    updated = runtime.control.update_profile(profile_id, {"model": body.model})
+    if profile_id == runtime.session.current_profile_id():
+        await runtime.session.sync_profiles(
+            runtime.runtime_profiles(),
             profile_id,
             restart=False,
         )
-    telemetry.log(
+    runtime.telemetry.log(
         "INFO",
         "Models",
         f"Для профиля «{profile['name']}» выбрана модель {body.model}",
@@ -2813,12 +2468,12 @@ async def select_profile_model(profile_id: str, body: ModelSelect):
 @app.delete("/api/control/events")
 async def clear_control_events():
     _persistent_telemetry_store()
-    telemetry.events.clear()
+    runtime.telemetry.events.clear()
     try:
-        await telemetry.store_call_async("clear_events")
+        await runtime.telemetry.store_call_async("clear_events")
     except Exception:
         raise HTTPException(503, "could not clear persistent event log") from None
-    if telemetry.storage_error:
+    if runtime.telemetry.storage_error:
         raise HTTPException(503, "could not clear persistent event log")
     return {"ok": True}
 

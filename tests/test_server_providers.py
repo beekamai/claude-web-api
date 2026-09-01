@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException
 
 import claude_web_api.app as server
+from claude_web_api import runtime
 from claude_web_api.control.config import ControlConfig
 
 
@@ -36,22 +37,18 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         )
-        self.control_patch = patch.object(
-            server,
-            "control",
+        self.control_patch = patch.object(runtime, "control",
             self.control,
         )
         self.control_patch.start()
         self.addCleanup(self.control_patch.stop)
-        self.registry = server.ProviderRegistry()
+        self.registry = runtime.ProviderRegistry()
         self.registry.register(
             server.CLAUDE_WEB_PROVIDER_ID,
-            server.claude_provider,
+            runtime.claude_provider,
             profile_ids=("default",),
         )
-        self.registry_patch = patch.object(
-            server,
-            "provider_registry",
+        self.registry_patch = patch.object(runtime, "provider_registry",
             self.registry,
         )
         self.registry_patch.start()
@@ -60,11 +57,11 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
     def test_grok_profile_never_enters_claude_session_rotation(self) -> None:
         self.control.set_active_profile(self.grok["id"])
 
-        runtime = server._runtime_profiles()
+        profiles = runtime.runtime_profiles()
 
-        self.assertEqual(["default"], [row["id"] for row in runtime])
+        self.assertEqual(["default"], [row["id"] for row in profiles])
         self.assertTrue(
-            all(row["provider"] == "claude_web" for row in runtime)
+            all(row["provider"] == "claude_web" for row in profiles)
         )
 
     async def test_profile_create_persists_requested_browser_provider(
@@ -102,18 +99,16 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(
-                server.session,
+                runtime.session,
                 "health_snapshot",
                 return_value={"native": {}, "ok": True},
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "sync_profiles",
                 AsyncMock(),
             ),
-            patch.object(
-                server,
-                "_persist_runtime_identity",
+            patch.object(runtime, "persist_runtime_identity",
                 return_value=True,
             ),
         ):
@@ -155,12 +150,12 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(
-                server.session,
+                runtime.session,
                 "current_profile_id",
                 return_value="default",
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "selectable_models",
                 return_value=[
                     {
@@ -171,7 +166,7 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
                 ],
             ),
         ):
-            resolved = server._resolve_request_model("auto")
+            resolved = runtime.resolve_request_model("auto")
 
         self.assertEqual("claude-sonnet", resolved)
 
@@ -186,12 +181,12 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
                 )
                 with (
                     patch.object(
-                        server.enrollment,
+                        runtime.enrollment,
                         "is_running",
                         AsyncMock(return_value=True),
                     ),
                     patch.object(
-                        server.enrollment,
+                        runtime.enrollment,
                         "inspect",
                         AsyncMock(
                             return_value={
@@ -220,7 +215,7 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         with patch.object(
-            server.enrollment,
+            runtime.enrollment,
             "is_running",
             AsyncMock(return_value=False),
         ):
@@ -252,12 +247,12 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
         finish = AsyncMock()
         with (
             patch.object(
-                server.enrollment,
+                runtime.enrollment,
                 "is_running",
                 AsyncMock(return_value=True),
             ),
             patch.object(
-                server.enrollment,
+                runtime.enrollment,
                 "inspect",
                 AsyncMock(
                     return_value={
@@ -276,13 +271,13 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(
-                server.enrollment,
+                runtime.enrollment,
                 "internal_identity",
                 AsyncMock(return_value={"account_uuid": "grok-account-1"}),
             ),
-            patch.object(server.enrollment, "finish", finish),
+            patch.object(runtime.enrollment, "finish", finish),
             patch.object(
-                server.enrollment,
+                runtime.enrollment,
                 "ensure_project",
                 ensure_project,
             ),
@@ -313,7 +308,7 @@ class ServerProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
     def test_capability_snapshot_advertises_no_unverified_features(
         self,
     ) -> None:
-        grok = server._provider_capabilities_snapshot()["grok_web"]
+        grok = runtime.provider_capabilities_snapshot()["grok_web"]
 
         self.assertFalse(grok["streaming"])
         self.assertFalse(grok["thinking"])

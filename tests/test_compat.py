@@ -20,7 +20,7 @@ os.environ["OPENCLAUDE_TELEMETRY_DB"] = str(
 )
 
 import claude_web_api.app as server
-from claude_web_api import sanitize
+from claude_web_api import runtime, sanitize
 from claude_web_api.control.config import (
     CONFIG_VERSION,
     SUPPORTED_PROFILE_PROVIDERS,
@@ -1891,7 +1891,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_ready_endpoint_returns_503_when_browser_is_not_ready(self) -> None:
         with patch.object(
-            server.session,
+            runtime.session,
             "health_snapshot",
             return_value={"ok": False},
         ):
@@ -1909,7 +1909,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_liveness_endpoint_never_touches_browser(self) -> None:
         with patch.object(
-            server.session,
+            runtime.session,
             "watchdog_healthy",
             return_value=True,
         ):
@@ -1942,7 +1942,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             },
         ]
         with patch.object(
-            server.session,
+            runtime.session,
             "selectable_models",
             return_value=catalog,
         ):
@@ -1966,23 +1966,23 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         ]
         with (
             patch.object(
-                server.control,
+                runtime.control,
                 "profile",
                 return_value={"id": "default", "model": "auto"},
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "current_profile_id",
                 return_value="default",
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "selectable_models",
                 return_value=catalog,
             ),
         ):
             with self.assertRaises(server.HTTPException) as raised:
-                server._resolve_request_model(
+                runtime.resolve_request_model(
                     "claude-fable-5",
                     profile_id="default",
                 )
@@ -2007,7 +2007,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             ],
         }
         with patch.object(
-            server.control,
+            runtime.control,
             "profile",
             return_value=profile,
         ):
@@ -2051,22 +2051,22 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         }
         with (
             patch.object(
-                server.session,
+                runtime.session,
                 "health_snapshot",
                 return_value=health,
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "account_uuid_for_internal_use",
                 return_value=account_uuid,
             ),
             patch.object(
-                server.control,
+                runtime.control,
                 "account_fingerprint",
                 return_value="salted-hash",
             ),
             patch.object(
-                server.control,
+                runtime.control,
                 "profile",
                 return_value={
                     "id": "default",
@@ -2075,13 +2075,13 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
                 },
             ),
             patch.object(
-                server.control,
+                runtime.control,
                 "profile_with_fingerprint",
                 return_value=None,
             ),
-            patch.object(server.control, "update_profile") as update_profile,
+            patch.object(runtime.control, "update_profile") as update_profile,
         ):
-            server._persist_runtime_identity()
+            runtime.persist_runtime_identity()
         updates = update_profile.call_args.args[1]
         self.assertEqual("salted-hash", updates["account_fingerprint"])
         self.assertNotIn(account_uuid, json.dumps(updates))
@@ -2111,21 +2111,21 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         }
         with (
             patch.object(
-                server.session,
+                runtime.session,
                 "health_snapshot",
                 return_value=health,
             ),
             patch.object(
-                server.control,
+                runtime.control,
                 "profile",
                 return_value={
                     "id": "default",
                     "model": "claude-fable-5",
                 },
             ),
-            patch.object(server.control, "update_profile") as update_profile,
+            patch.object(runtime.control, "update_profile") as update_profile,
         ):
-            self.assertTrue(server._persist_runtime_identity())
+            self.assertTrue(runtime.persist_runtime_identity())
         self.assertEqual(
             "auto",
             update_profile.call_args.args[1]["model"],
@@ -2668,9 +2668,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         # Endpoint unit tests exercise request/response mapping, not the
         # machine's live profile identity. Keep them independent from a
         # concurrently running server and its control_config.json.
-        self._runtime_identity_patch = patch.object(
-            server,
-            "_persist_runtime_identity",
+        self._runtime_identity_patch = patch.object(runtime, "persist_runtime_identity",
             return_value=True,
         )
         self._runtime_identity_patch.start()
@@ -2683,8 +2681,8 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             config = ControlConfig(Path(temporary) / "control_config.json")
             raw = "Она реальный человек и любит колу."
             with (
-                patch.object(server, "control", config),
-                patch.object(server.telemetry, "log"),
+                patch.object(runtime, "control", config),
+                patch.object(runtime.telemetry, "log"),
             ):
                 patched = await server.update_behavior(
                     server.BehaviorPatch(
@@ -2700,20 +2698,18 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(patched["persona_compilation"]["active"])
 
             with (
-                patch.object(server, "control", config),
+                patch.object(runtime, "control", config),
                 patch.object(
-                    server.session,
+                    runtime.session,
                     "health_snapshot",
                     return_value={},
                 ),
                 patch.object(
-                    server.telemetry,
+                    runtime.telemetry,
                     "snapshot",
                     return_value={},
                 ),
-                patch.object(
-                    server,
-                    "_provider_capabilities_snapshot",
+                patch.object(runtime, "provider_capabilities_snapshot",
                     return_value=[],
                 ),
             ):
@@ -2876,14 +2872,14 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                 "custom_persona": "",
             }
             with (
-                patch.object(server.telemetry, "store", store),
+                patch.object(runtime.telemetry, "store", store),
                 patch.object(
-                    server.control,
+                    runtime.control,
                     "telemetry_settings",
                     return_value=settings,
                 ),
                 patch.object(
-                    server.control,
+                    runtime.control,
                     "behavior",
                     return_value=behavior,
                 ),
@@ -2947,7 +2943,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_request_scoped_telemetry_does_not_cross_contaminate(self) -> None:
-        telemetry = server.RuntimeTelemetry()
+        telemetry = runtime.RuntimeTelemetry()
         telemetry.begin("a", "m1", "p1")
         telemetry.begin("b", "m2", "p2")
         telemetry.native_event("a", {"type": "text_delta", "text": "abcd"})
@@ -2964,7 +2960,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             messages=[{"role": "user", "content": "next turn"}]
         )
         with patch.object(
-            server.session,
+            runtime.session,
             "client_session_requires_new",
             side_effect=[True, False, True],
         ):
@@ -3077,24 +3073,24 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         with (
-            patch.object(server, "_persist_runtime_identity", return_value=True),
+            patch.object(runtime, "persist_runtime_identity", return_value=True),
             patch.object(
-                server.session,
+                runtime.session,
                 "native_request_state",
                 AsyncMock(return_value=(set(), False)),
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "client_session_requires_new",
                 return_value=False,
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "privacy_mode_requires_new",
                 return_value=False,
             ),
             patch.object(
-                server.control,
+                runtime.control,
                 "behavior_snapshot",
                 return_value=(
                     {
@@ -3107,7 +3103,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                     "",
                 ),
             ),
-            patch.object(server.session, "native_chat", native),
+            patch.object(runtime.session, "native_chat", native),
         ):
             await server._native_request(
                 body,
@@ -3159,28 +3155,28 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         }
         resolved_persona = ControlConfig.persona_prompt_for(behavior)
         with (
-            patch.object(server, "_persist_runtime_identity", return_value=True),
+            patch.object(runtime, "persist_runtime_identity", return_value=True),
             patch.object(
-                server.session,
+                runtime.session,
                 "native_request_state",
                 AsyncMock(return_value=(set(), False)),
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "client_session_requires_new",
                 return_value=False,
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "privacy_mode_requires_new",
                 return_value=False,
             ),
             patch.object(
-                server.control,
+                runtime.control,
                 "behavior_snapshot",
                 return_value=(behavior, resolved_persona),
             ) as behavior_snapshot,
-            patch.object(server.session, "native_chat", native),
+            patch.object(runtime.session, "native_chat", native),
         ):
             await server._native_request(
                 body,
@@ -3241,28 +3237,28 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             "custom_persona": "",
         }
         with (
-            patch.object(server, "_persist_runtime_identity", return_value=True),
+            patch.object(runtime, "persist_runtime_identity", return_value=True),
             patch.object(
-                server.session,
+                runtime.session,
                 "native_request_state",
                 AsyncMock(return_value=(set(), False)),
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "client_session_requires_new",
                 return_value=False,
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "privacy_mode_requires_new",
                 return_value=False,
             ),
             patch.object(
-                server.control,
+                runtime.control,
                 "behavior_snapshot",
                 return_value=(behavior, ""),
             ),
-            patch.object(server.session, "native_chat", native),
+            patch.object(runtime.session, "native_chat", native),
         ):
             await server._native_request(
                 body,
@@ -3394,28 +3390,28 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             "custom_persona": "",
         }
         with (
-            patch.object(server, "_persist_runtime_identity", return_value=True),
+            patch.object(runtime, "persist_runtime_identity", return_value=True),
             patch.object(
-                server.session,
+                runtime.session,
                 "native_request_state",
                 AsyncMock(return_value=(set(), False)),
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "client_session_requires_new",
                 return_value=False,
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "privacy_mode_requires_new",
                 return_value=True,
             ),
             patch.object(
-                server.control,
+                runtime.control,
                 "behavior_snapshot",
                 return_value=(behavior, ""),
             ),
-            patch.object(server.session, "native_chat", native),
+            patch.object(runtime.session, "native_chat", native),
         ):
             await server._native_request(
                 body,
@@ -3464,7 +3460,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "native_chat",
                 AsyncMock(
                     side_effect=ClaudeUsageLimitError(
@@ -3515,7 +3511,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         )
         with (
             patch.object(
-                server.control,
+                runtime.control,
                 "behavior_snapshot",
                 return_value=(behavior, resolved_persona),
             ),
@@ -3530,11 +3526,11 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "current_profile_id",
                 return_value="default",
             ),
-            patch.object(server.session, "native_chat", retry),
+            patch.object(runtime.session, "native_chat", retry),
         ):
             result = await server._run_native_with_limits(
                 body,
@@ -3580,25 +3576,23 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         )
         with (
             patch.object(
-                server.session,
+                runtime.session,
                 "current_profile_id",
                 side_effect=["default", "alternate"],
             ),
-            patch.object(
-                server,
-                "_eligible_rotation_ids",
+            patch.object(runtime, "eligible_rotation_ids",
                 return_value={"default", "alternate"},
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "rotate_profile",
                 AsyncMock(return_value=True),
             ),
-            patch.object(server.session, "native_chat", retry),
-            patch.object(server.control, "update_profile"),
-            patch.object(server.control, "set_active_profile"),
-            patch.object(server, "_resolve_request_model", return_value=None),
-            patch.object(server.telemetry, "log"),
+            patch.object(runtime.session, "native_chat", retry),
+            patch.object(runtime.control, "update_profile"),
+            patch.object(runtime.control, "set_active_profile"),
+            patch.object(runtime, "resolve_request_model", return_value=None),
+            patch.object(runtime.telemetry, "log"),
         ):
             result = await server._rotate_after_usage_limit(
                 body,
@@ -3646,7 +3640,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                         tool_uses=[],
                     )
                 )
-                with patch.object(server.session, "native_chat", fake):
+                with patch.object(runtime.session, "native_chat", fake):
                     response = await server.openai_compat(
                         server.CompletionsIn(
                             messages=[SYSTEM, {"role": "user", "content": prompt}],
@@ -3672,7 +3666,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                 ],
             )
         )
-        with patch.object(server.session, "native_chat", fake):
+        with patch.object(runtime.session, "native_chat", fake):
             response = await server.openai_compat(
                 server.CompletionsIn(
                     messages=[
@@ -3725,12 +3719,12 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         ]
         with (
             patch.object(
-                server.session,
+                runtime.session,
                 "native_request_state",
                 AsyncMock(return_value=({"toolu_real"}, False)),
             ),
-            patch.object(server.session, "continue_native", continuation),
-            patch.object(server.session, "native_chat", start),
+            patch.object(runtime.session, "continue_native", continuation),
+            patch.object(runtime.session, "native_chat", start),
         ):
             response = await server.openai_compat(
                 server.CompletionsIn(messages=messages, tools=TOOLS)
@@ -3789,26 +3783,26 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         )
         recovered = AsyncMock()
         with (
-            patch.object(server, "_persist_runtime_identity", return_value=True),
+            patch.object(runtime, "persist_runtime_identity", return_value=True),
             patch.object(
-                server.session,
+                runtime.session,
                 "native_request_state",
                 AsyncMock(return_value=({"toolu_stale"}, False)),
             ),
             patch.object(
-                server.session,
+                runtime.session,
                 "abandon_pending_native",
                 abandon,
             ),
-            patch.object(server.session, "continue_native", continuation),
+            patch.object(runtime.session, "continue_native", continuation),
             patch.object(
-                server.session,
+                runtime.session,
                 "privacy_mode_requires_new",
                 return_value=False,
             ),
-            patch.object(server.session, "native_chat", start),
+            patch.object(runtime.session, "native_chat", start),
             patch.object(
-                server.session,
+                runtime.session,
                 "mark_history_recovered",
                 recovered,
             ),
@@ -3886,13 +3880,13 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         ]
         with (
             patch.object(
-                server.session,
+                runtime.session,
                 "native_request_state",
                 AsyncMock(return_value=(set(), True)),
             ),
-            patch.object(server.session, "native_chat", fake),
+            patch.object(runtime.session, "native_chat", fake),
             patch.object(
-                server.session,
+                runtime.session,
                 "mark_history_recovered",
                 recovered,
             ),
@@ -3917,7 +3911,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         fake = AsyncMock(
             return_value=NativeTurn(content="ok", tool_uses=[])
         )
-        with patch.object(server.session, "native_chat", fake):
+        with patch.object(runtime.session, "native_chat", fake):
             response = await server.openai_compat(
                 server.CompletionsIn(
                     messages=[SYSTEM, {"role": "user", "content": "hello"}]
@@ -3936,9 +3930,9 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         with (
-            patch.object(server.session, "native_chat", fake),
+            patch.object(runtime.session, "native_chat", fake),
             patch.object(
-                server.control,
+                runtime.control,
                 "behavior_snapshot",
                 return_value=(
                     {
