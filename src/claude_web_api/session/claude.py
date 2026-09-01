@@ -350,6 +350,11 @@ SSE_TAP_SCRIPT = r"""
 })();
 """
 
+def _string_list(value: Any) -> list[Any]:
+    """Read a field that upstream may omit or send as a non-list."""
+    return value if isinstance(value, list) else []
+
+
 MODEL_SELECTOR_TRANSIENT_REASONS = (
     "selector_database_missing",
     "selector_database_open_failed",
@@ -1106,7 +1111,7 @@ class ClaudeSession:
         if not self.profile_specs:
             raise ValueError("at least one browser profile is required")
         self.profile_dirs = [
-            Path(row["path"]) for row in self.profile_specs
+            Path(str(row["path"])) for row in self.profile_specs
         ]
         self.profile_index = next(
             (
@@ -1324,7 +1329,9 @@ class ClaudeSession:
             if needs_restart:
                 await self._stop_browser_unlocked()
             self.profile_specs = normalized
-            self.profile_dirs = [Path(row["path"]) for row in normalized]
+            self.profile_dirs = [
+                Path(str(row["path"])) for row in normalized
+            ]
             self.profile_index = target_index
             if needs_restart:
                 await self.start()
@@ -1921,14 +1928,8 @@ class ClaudeSession:
                         ),
                         "supports_fast_mode": bool(
                             raw_model.get("supports_fast_mode")
-                            or "instant"
-                            in (
+                            or "instant" in _string_list(
                                 raw_model.get("paprika_modes")
-                                if isinstance(
-                                    raw_model.get("paprika_modes"),
-                                    list,
-                                )
-                                else []
                             )
                         ),
                     }

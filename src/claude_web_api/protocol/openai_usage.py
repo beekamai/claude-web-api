@@ -23,6 +23,7 @@ def usage_integer(value: Any) -> int | None:
 def openai_usage(raw: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(raw, dict) or not raw:
         return None
+    prompt_tokens: int | None
     completion = raw.get("output_tokens", raw.get("completion_tokens"))
     completion_tokens = usage_integer(completion)
     if "input_tokens" in raw:

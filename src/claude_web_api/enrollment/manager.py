@@ -337,7 +337,9 @@ class ProfileEnrollmentManager:
                 # xAI currently rejects the Camoufox/Firefox enrollment
                 # window. Keep auth inside an installed Chrome process with a
                 # dedicated persistent profile; no session material leaves it.
-                camoufox = _ChromeEnrollmentBrowser(path)
+                camoufox: _ChromeEnrollmentBrowser | AsyncCamoufox = (
+                    _ChromeEnrollmentBrowser(path)
+                )
                 browser_engine = "chrome"
             else:
                 # Preserve the established Claude enrollment backend exactly.

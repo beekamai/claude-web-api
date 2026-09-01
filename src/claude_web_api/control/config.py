@@ -733,7 +733,7 @@ class ControlConfig:
                 self.path.parent / "profiles" / profile_id
             ).resolve()
             profile_path.mkdir(parents=True, exist_ok=True)
-            row = {
+            row: dict[str, Any] = {
                 "id": profile_id,
                 "name": clean_name[:80],
                 "path": str(profile_path),

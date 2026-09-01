@@ -562,6 +562,7 @@ class TelemetryStore:
         tokens_per_second = None
         if (
             usage_exact
+            and completion_tokens is not None
             and generation_seconds is not None
             and generation_seconds > 0
         ):

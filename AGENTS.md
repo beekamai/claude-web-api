@@ -121,11 +121,8 @@ left a decorator behind and silently re-bound `/api/control/state` to `main()`.
 - Account-scoped files (`control_config.json`, `claude_project.json`,
   `project_prompt_leases.json`) are gitignored and recreated from defaults on
   first run. `*.example.json` files document their shape.
-- `mypy` currently reports 7 errors in inherited code (`session/claude.py`,
-  `enrollment/manager.py`, `telemetry/store.py`, `control/config.py`,
-  `protocol/openai_usage.py`). It is configured in `pyproject.toml` but kept
-  out of CI rather than being suppressed with a passing exit code. Fixing those
-  is welcome; masking them is not.
+- `mypy` is clean and runs in CI. Keep it that way: if a check cannot be
+  satisfied honestly, fix the type rather than suppressing the error.
 - The Grok provider is deliberately fail-closed: xAI blocks automated browsers,
   so it reports no capabilities and refuses activation. Do not "fix" it by
   making it claim support.
