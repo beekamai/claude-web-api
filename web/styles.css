@@ -2636,3 +2636,13 @@ textarea:focus-visible,
     transition-duration: .01ms !important;
   }
 }
+
+/* A setting the privacy mode overrides: shown, explained, and not clickable. */
+.is-overridden {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.is-overridden .switch {
+  pointer-events: none;
+}

@@ -468,6 +468,9 @@
   }
 
   function setRoute(route) {
+    // A request dialog belongs to the activity section; leaving it open while
+    // the section changes hides the section you actually asked for.
+    closeHistoryDetail();
     const normalizedRoute = route === "diagnostics" ? "activity" : route;
     const allowed = new Set(["overview", "profiles", "models", "behavior", "activity"]);
     ui.route = allowed.has(normalizedRoute) ? normalizedRoute : "overview";
@@ -834,6 +837,18 @@
       } else if (!isActive && providerReady) {
         actions.append(
           actionButton("Активировать", "activate-profile", profile.id, "outline"),
+        );
+        actions.append(
+          actionButton("Войти заново", "open-profile-login", profile.id),
+        );
+      } else if (isActive) {
+        // The active profile used to show nothing here, which left no way to
+        // re-authenticate a session that had expired.
+        actions.append(
+          actionButton("Войти заново", "open-profile-login", profile.id),
+        );
+        actions.append(
+          actionButton("Проверить", "check-active-login", profile.id),
         );
       } else if (!isActive) {
         actions.append(
@@ -1320,6 +1335,14 @@
       panel.classList.toggle("is-active", active);
       panel.hidden = !active;
     });
+    // One search box serves all three tabs, so it has to say what it searches
+    // in the tab you are on: logs carry no model name.
+    const search = $("#activity-search");
+    if (search) {
+      search.placeholder = ui.activityTab === "logs"
+        ? "Компонент, сообщение или уровень"
+        : "Модель, текст или ошибка";
+    }
     $('[data-activity-filter="status"]').hidden = ui.activityTab !== "history";
     $('[data-activity-filter="level"]').hidden = ui.activityTab !== "logs";
     $('[data-activity-filter="provider"]').hidden = ui.activityTab === "logs";
@@ -1331,7 +1354,16 @@
       ui.activity?.settings ||
       ui.state?.config?.telemetry ||
       { store_content: false, retention_days: 30 };
-    $("#activity-store-content").checked = Boolean(settings.store_content);
+    const contentToggle = $("#activity-store-content");
+    const suppressed = Boolean(settings.ephemeral_suppresses_content);
+    // Ephemeral privacy overrides the setting, so showing the switch as "on"
+    // while nothing is stored is the reason the journal looks broken.
+    contentToggle.checked = Boolean(settings.store_content) && !suppressed;
+    contentToggle.disabled = suppressed;
+    contentToggle.closest("label")?.classList.toggle("is-overridden", suppressed);
+    contentToggle.title = suppressed
+      ? "Эфемерный режим приватности отключает сохранение текстов. Смените приватность на «Обычный» во вкладке «Поведение»."
+      : "";
     const retention = $("#activity-retention");
     const retentionValue = String(settings.retention_days || 30);
     if (![...retention.options].some((option) => option.value === retentionValue)) {
@@ -1577,32 +1609,8 @@
   }
 
   function renderActivityLogs() {
-    const systems = normalizeSystems();
-    const grid = $("#diagnostic-system-grid");
-    grid.replaceChildren();
-    if (!systems.length) {
-      grid.append(
-        node("section", { className: "panel" }, [
-          node("div", { className: "table-empty", text: "Backend не передал данные о компонентах" }),
-        ]),
-      );
-    } else {
-      systems.forEach((system) => {
-        grid.append(
-          node("article", { className: "diagnostic-card" }, [
-            icon(systemIcon(system.id)),
-            node("div", {}, [
-              node("strong", { text: system.name }),
-              node("small", { text: system.detail || "Без дополнительной информации" }),
-              node("span", {
-                className: `health-badge health-badge--${system.kind}`,
-                text: healthLabel(system.kind, system.status),
-              }),
-            ]),
-          ]),
-        );
-      });
-    }
+    // Component health lives on the overview; repeating it above the log
+    // stream only pushed the log itself further down the page.
     const response = activityPage(ui.activity?.events);
     const events = response.items.length
       ? response.items
