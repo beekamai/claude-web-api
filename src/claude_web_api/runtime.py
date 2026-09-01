@@ -84,8 +84,6 @@ def provider_profile_id(provider_id: str) -> str:
 def runtime_profiles(
     provider_id: str = CLAUDE_WEB_PROVIDER_ID,
 ) -> list[dict[str, Any]]:
-    snapshot = control.snapshot()
-    del snapshot
     active = provider_profile_id(provider_id)
     allowed = []
     for row in control.session_profiles():
