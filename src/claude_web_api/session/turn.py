@@ -200,6 +200,10 @@ class NativeTurnMixin(SessionState):
                 and requested_privacy == "ephemeral"
             ):
                 new_chat = True
+            if self._fresh_chat_required:
+                # Set when a previous turn was cancelled after submitting.
+                new_chat = True
+                self._fresh_chat_required = False
             if new_chat:
                 pass
             elif self._native_active and self._native_wait_expired():
@@ -281,10 +285,19 @@ class NativeTurnMixin(SessionState):
                 }
                 self._clear_native_state()
                 if committed:
+                    # The client hung up — Ctrl+C in the IDE, or a closed
+                    # stream. The browser itself is fine, so restarting it
+                    # would spend a recovery (and five of those open the
+                    # restart circuit). The page may still be generating into
+                    # the abandoned chat, so the next turn starts a clean one.
                     self._history_recovery_required = True
-                    self._mark_browser_dead(
+                    self._fresh_chat_required = True
+                    self._operation_id = None
+                    self._last_error = (
                         "native request was cancelled after submit"
                     )
+                    if self.ready:
+                        self._set_phase("idle")
                 else:
                     self._operation_id = None
                     if self.ready:

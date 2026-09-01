@@ -248,6 +248,15 @@ async def native_request(
                 pending_ids,
                 client_session_id=client_session_id,
             )
+            if recovery_required and _client_starts_fresh_chat(body):
+                # Abandoning resets the browser chat, and recovery replays the
+                # transcript into it so Claude can pick the task back up. A
+                # client that is itself starting over has no transcript worth
+                # replaying, and the recovery preamble reads as a conversation
+                # about the IDE rather than work inside it — which is enough to
+                # talk Claude out of using its tools at all.
+                await runtime.session.mark_history_recovered()
+                recovery_required = False
         else:
             results = matching_tool_results(body.messages, pending_ids)
             continued = await runtime.claude_provider.continue_with_tool_results(

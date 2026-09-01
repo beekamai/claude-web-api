@@ -141,6 +141,11 @@ left a decorator behind and silently re-bound `/api/control/state` to `main()`.
   first run. `*.example.json` files document their shape.
 - `mypy` is clean and runs in CI. Keep it that way: if a check cannot be
   satisfied honestly, fix the type rather than suppressing the error.
+- **A client hanging up is normal, not a browser failure.** Ctrl+C in the IDE
+  cancels the request mid-turn; the bridge abandons the pending tool call and
+  sets `_fresh_chat_required` so the next turn starts clean. Do not restore the
+  old behaviour of marking the browser dead there — five interruptions then hit
+  the restart circuit and take the bridge down.
 - The Grok provider is deliberately fail-closed: xAI blocks automated browsers,
   so it reports no capabilities and refuses activation. Do not "fix" it by
   making it claim support.

@@ -285,6 +285,7 @@ class ClaudeSession(
         self._native_pending_deadline: float | None = None
         self._native_parallel_tool_calls = True
         self._history_recovery_required = False
+        self._fresh_chat_required = False
         self._tool_result_lease_seconds = float(
             os.getenv("CLAUDE_TOOL_RESULT_TIMEOUT", "600")
         )

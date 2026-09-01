@@ -60,6 +60,30 @@ class StrandedTurnTests(unittest.IsolatedAsyncioTestCase):
         self.continued.assert_not_awaited()
         self.assertEqual("ok", turn.content)
 
+    async def test_starting_over_does_not_replay_a_transcript(self) -> None:
+        """Recovery exists to rebuild a reset chat. A client that is itself
+        starting over has nothing to rebuild, and the recovery preamble talks
+        Claude out of using its tools."""
+        recovered = AsyncMock()
+        native = AsyncMock(return_value=answer())
+        patches = (
+            *self.bridge(),
+            patch.object(runtime.session, "native_chat", native),
+            patch.object(runtime.session, "mark_history_recovered", recovered),
+        )
+        for entry in patches:
+            entry.start()
+            self.addCleanup(entry.stop)
+
+        await completions.native_request(
+            completions.CompletionsIn(
+                messages=[{"role": "user", "content": "something else"}],
+            )
+        )
+        recovered.assert_awaited_once()
+        sent = native.await_args.kwargs.get("message") or native.await_args.args[0]
+        self.assertNotIn("Recover the IDE task", str(sent))
+
     async def test_explicit_new_chat_releases_the_stranded_call(self) -> None:
         await self.run_request(
             completions.CompletionsIn(

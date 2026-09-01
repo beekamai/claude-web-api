@@ -554,7 +554,14 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         recover.assert_not_awaited()
         self.assertTrue(native_session._history_recovery_required)
 
-    async def test_cancel_after_enter_marks_turn_desynced(self) -> None:
+    async def test_cancel_after_enter_keeps_the_browser_and_resets_chat(
+        self,
+    ) -> None:
+        """A hung-up client costs a fresh chat, not a browser restart.
+
+        Five restarts open the recovery circuit, so treating every Ctrl+C as a
+        dead browser took the bridge down after five interruptions.
+        """
         native_session = ClaudeSession(headless=True)
 
         async def cancel_after_enter(message: str) -> None:
@@ -578,7 +585,8 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
                 await native_session.native_chat("hello", tools=[])
         submit.assert_awaited_once()
         self.assertFalse(native_session._native_active)
-        self.assertTrue(native_session._browser_dead.is_set())
+        self.assertFalse(native_session._browser_dead.is_set())
+        self.assertTrue(native_session._fresh_chat_required)
         self.assertTrue(native_session._history_recovery_required)
 
     async def test_submit_ack_loss_is_reported_as_ambiguous(self) -> None:

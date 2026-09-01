@@ -30,6 +30,7 @@ class SessionState:
     _conversation_privacy_mode: str | None
     _driver_pid: int | None
     _history_recovery_required: Any
+    _fresh_chat_required: bool
     _humanize_seconds: Any
     _last_completion_shape: dict[str, Any]
     _last_error: str | None
