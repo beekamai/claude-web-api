@@ -2375,8 +2375,13 @@
       || (status === "project_setup_error"
         ? snapshot?.last_error || "Не удалось настроить Claude Project для профиля."
         : null)
-      || (["duplicate", "account_changed"].includes(status)
-        ? "Профиль не готов: аккаунт уже используется или был заменён."
+      || (status === "duplicate"
+        ? (snapshot?.duplicate?.name
+          ? `Этот аккаунт уже привязан к профилю «${snapshot.duplicate.name}». Один аккаунт — один профиль: войдите здесь другим аккаунтом или удалите лишний профиль.`
+          : "Этот аккаунт уже привязан к другому профилю.")
+        : null)
+      || (status === "account_changed"
+        ? "В браузере этого профиля теперь другой аккаунт. Войдите прежним или создайте для нового отдельный профиль."
         : null);
     const models = Array.isArray(snapshot?.models) ? snapshot.models : [];
 

@@ -1099,6 +1099,26 @@ async def install_client_status(client_id: str):
     return state
 
 
+def _decode_console_output(raw: bytes) -> str:
+    """Installer output is UTF-8 when we asked for it, OEM otherwise.
+
+    npm writes in the console code page; on a Russian Windows that is
+    cp866, and decoding it as UTF-8 shows the panel a row of boxes.
+    """
+    fallback = "oem" if os.name == "nt" else "utf-8"
+    lines: list[str] = []
+    # Decode per line: one process can mix UTF-8 with OEM output.
+    for line in raw.splitlines():
+        try:
+            lines.append(line.decode("utf-8"))
+        except UnicodeDecodeError:
+            try:
+                lines.append(line.decode(fallback, "replace"))
+            except LookupError:
+                lines.append(line.decode("utf-8", "replace"))
+    return "\n".join(lines)
+
+
 async def _run_install(
     command: tuple[str, ...],
     state: dict[str, Any],
@@ -1132,7 +1152,7 @@ async def _run_install(
             output="установка не завершилась за 15 минут",
         )
         return
-    text = (stdout or b"").decode("utf-8", "replace")
+    text = _decode_console_output(stdout or b"")
     state.update(
         status="completed" if process.returncode == 0 else "error",
         finished_at=time.time(),

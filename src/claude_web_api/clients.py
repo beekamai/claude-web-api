@@ -9,6 +9,7 @@ credential is present, never its value.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -44,13 +45,24 @@ def _home() -> Path:
 def claude_code_installer(platform: str = os.name) -> tuple[str, ...]:
     """Windows gets Anthropic's native installer, which needs no Node."""
     if platform == "nt":
+        # -EncodedCommand sidesteps argument quoting and the console code
+        # page: a plain -Command reached PowerShell mangled on a Russian
+        # Windows and failed to parse. The script also switches its output to
+        # UTF-8 so the panel can show it.
+        script = (
+            "$ProgressPreference = 'SilentlyContinue'; "
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+            "try { irm https://claude.ai/install.ps1 | iex } "
+            "catch { Write-Output $_; exit 1 }"
+        )
+        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
         return (
             "powershell",
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
-            "-Command",
-            "irm https://claude.ai/install.ps1 | iex",
+            "-EncodedCommand",
+            encoded,
         )
     return ("npm", "install", "-g", "@anthropic-ai/claude-code")
 

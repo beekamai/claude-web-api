@@ -7,6 +7,7 @@ and switching a client over keeps what it had before.
 
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import unittest
@@ -117,7 +118,9 @@ class InstallPlanTests(unittest.TestCase):
     def test_claude_code_on_windows_does_not_need_node(self) -> None:
         command = clients.claude_code_installer("nt")
         self.assertEqual("powershell", command[0])
-        self.assertIn("claude.ai/install.ps1", command[-1])
+        self.assertEqual("-EncodedCommand", command[-2])
+        script = base64.b64decode(command[-1]).decode("utf-16-le")
+        self.assertIn("irm https://claude.ai/install.ps1 | iex", script)
         self.assertEqual("npm", clients.claude_code_installer("posix")[0])
 
 

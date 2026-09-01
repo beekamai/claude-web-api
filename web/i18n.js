@@ -373,6 +373,9 @@
     [/^(.+) отклонил автоматизированный браузер\. Ручной Chrome на этом ПК работает\.$/, "$1 rejected the automated browser. A manual Chrome on this PC works."],
     [/^OpenClaude переформулировал (\d+) конфликтных фрагментов, не меняя сохранённый исходник\.$/, "OpenClaude rephrased $1 conflicting fragments without changing the stored source."],
     [/^Требуется (.+)$/, "Requires $1"],
+    [/^Этот аккаунт уже привязан к профилю «(.+)»\. Один аккаунт — один профиль: войдите здесь другим аккаунтом или удалите лишний профиль\.$/, "This account already belongs to the profile “$1”. One account, one profile: log in here with a different account or remove the extra profile."],
+    [/^Этот аккаунт уже привязан к другому профилю\.$/, "This account already belongs to another profile."],
+    [/^В браузере этого профиля теперь другой аккаунт\. Войдите прежним или создайте для нового отдельный профиль\.$/, "This profile's browser is now logged into a different account. Log back in with the previous one, or create a separate profile for the new one."],
     [/^Модели · (.+)$/, "Models · $1"],
     [/^(.+) направлен на мост$/, "$1 pointed at the bridge"],
   ];
