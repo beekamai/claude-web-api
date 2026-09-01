@@ -189,3 +189,30 @@ class SessionState:
 
     async def _wait_ready(self, timeout: float=180.0) -> None:
         raise NotImplementedError
+
+    async def _activate_trusted_turn_context(self) -> None:
+        raise NotImplementedError
+
+    async def _new_chat_unlocked(self) -> None:
+        raise NotImplementedError
+
+    async def _prepare_composer_unlocked(self, *, new_chat: bool, native: bool) -> None:
+        raise NotImplementedError
+
+    def _process_native_event(self, envelope: dict[str, str]) -> bool:
+        raise NotImplementedError
+
+    async def _raise_if_limited(self, response_errors: list[str]) -> None:
+        raise NotImplementedError
+
+    def _reset_native_parser(self) -> None:
+        raise NotImplementedError
+
+    async def _submit_message(self, message: str) -> None:
+        raise NotImplementedError
+
+    def _take_native_text(self) -> str | None:
+        raise NotImplementedError
+
+    def _take_native_thinking(self) -> str | None:
+        raise NotImplementedError

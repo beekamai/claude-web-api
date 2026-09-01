@@ -34,7 +34,19 @@ src/claude_web_api/
     anthropic.py    Messages blocks <-> internal history
     openai_usage.py provider token counts -> OpenAI usage shape
   providers/        contracts, registry, claude_web, grok_web
-  session/claude.py the browser driver (largest file; see below)
+  session/          the browser driver, one module per concern
+    claude.py       ClaudeSession itself: construction, profiles, health
+    state.py        the attributes and hooks the mixins share
+    browser.py      starting, watching and recovering Camoufox
+    identity.py     account identity and the selectable-model catalogue
+    project.py      the trusted Project prompt and its lease
+    stream.py       route interception and the SSE frame parser
+    turn.py         one native turn and its tool results
+    composer.py     the pre-native chat path
+    scripts.py      page-side JavaScript, verbatim
+    errors.py       the failures a turn can end with
+    models.py       NativeTurn and NativeToolUse
+    patterns.py     shared regexes and markers
   control/config.py control_config.json store and persona compilation
   telemetry/        runtime journal + SQLite store
   enrollment/       adding an account through a visible browser
@@ -111,10 +123,16 @@ left a decorator behind and silently re-bound `/api/control/state` to `main()`.
 - **`_receive_sse` drops everything while no turn is active**, and does not
   count those events. Debug frames emitted at install time are therefore
   invisible; log inside `_receive_sse` itself when diagnosing the tap.
-- `session/claude.py` is ~4900 lines with a 90-method `ClaudeSession`. It embeds
-  browser-side JavaScript in string literals — that is why the file is exempt
-  from `E501` in `pyproject.toml`. Reflowing those literals changes the code
-  that runs in the page.
+- **The session mixins share one contract, `session/state.py`.** It declares
+  every attribute `ClaudeSession.__init__` creates and every method the mixins
+  call across module boundaries. Add a new cross-mixin call there too, or the
+  type checker cannot see it and a typo only surfaces at runtime.
+- Several session modules embed browser-side JavaScript in string literals —
+  that is why they are exempt from `E501` in `pyproject.toml`. Reflowing those
+  literals changes the code that runs in the page.
+- Tests patch names where they are *read*, not where they were defined. Moving
+  a method between session modules means the patch target moves with it; a
+  stale target can leave a test passing while asserting nothing.
 - FastAPI's `include_router` mounts a router as a single node, so
   `len(app.routes)` does not grow by the number of endpoints. Read
   `/openapi.json` to see what is actually served.
