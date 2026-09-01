@@ -45,6 +45,9 @@ ignore = ["B008", "RUF001", "RUF002", "RUF003", "RUF012"]
 # Both modules embed browser-side JavaScript verbatim; reflowing those
 # literals would change the code that actually runs in the page.
 "src/claude_web_api/session/claude.py" = ["E501"]
+"src/claude_web_api/session/composer.py" = ["E501"]
+"src/claude_web_api/session/browser.py" = ["E501"]
+"src/claude_web_api/session/identity.py" = ["E501"]
 "src/claude_web_api/enrollment/manager.py" = ["E501"]
 
 [tool.mypy]

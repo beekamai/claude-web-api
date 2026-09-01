@@ -168,3 +168,24 @@ class SessionState:
         epoch: Any = None,
     ) -> None:
         raise NotImplementedError
+
+    async def _ensure_healthy_unlocked(self, reason: str) -> None:
+        raise NotImplementedError
+
+    async def _goto_start_page(self, timeout_ms: int=60000) -> None:
+        raise NotImplementedError
+
+    async def _install_sse_tap(self) -> None:
+        raise NotImplementedError
+
+    def _mark_browser_dead(self, reason: str) -> None:
+        raise NotImplementedError
+
+    async def _recover_browser_unlocked(self, reason: str) -> None:
+        raise NotImplementedError
+
+    async def _verify_account_unchanged_unlocked(self) -> None:
+        raise NotImplementedError
+
+    async def _wait_ready(self, timeout: float=180.0) -> None:
+        raise NotImplementedError
