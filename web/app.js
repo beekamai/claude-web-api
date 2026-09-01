@@ -23,6 +23,7 @@
     activityFilterSignature: "",
     activitySearchTimer: null,
     historyRequestSerial: 0,
+    proxyProfileId: null,
   };
 
   const labels = {
@@ -471,8 +472,16 @@
     // A request dialog belongs to the activity section; leaving it open while
     // the section changes hides the section you actually asked for.
     closeHistoryDetail();
+    closeProxyDialog();
     const normalizedRoute = route === "diagnostics" ? "activity" : route;
-    const allowed = new Set(["overview", "profiles", "models", "behavior", "activity"]);
+    const allowed = new Set([
+      "overview",
+      "connect",
+      "profiles",
+      "models",
+      "behavior",
+      "activity",
+    ]);
     ui.route = allowed.has(normalizedRoute) ? normalizedRoute : "overview";
     $$(".nav-item").forEach((item) => {
       const active = item.dataset.route === ui.route;
@@ -483,6 +492,10 @@
     $$(".page").forEach((page) => {
       page.classList.toggle("is-active", page.dataset.page === ui.route);
     });
+    if (ui.route === "connect") {
+      renderClients();
+      refreshClients({ quiet: Boolean(ui.clients) }).catch(() => {});
+    }
     if (ui.route === "models") renderModels();
     if (ui.route === "activity") {
       renderActivity();
@@ -804,6 +817,229 @@
     });
   }
 
+  const connectionLabels = {
+    bridge: { text: "Настроен на мост", kind: "healthy" },
+    bridge_openai: { text: "Мост через OpenAI-путь", kind: "warning" },
+    elsewhere: { text: "Смотрит в другое место", kind: "warning" },
+    unset: { text: "Не настроен", kind: "muted" },
+  };
+
+  async function refreshClients({ quiet = false } = {}) {
+    try {
+      ui.clients = unwrap(await request("/clients"));
+      renderClients();
+    } catch (error) {
+      if (!quiet) toast(error.message, "error");
+    }
+  }
+
+  function commandBlock(title, command, note) {
+    return node("article", { className: "command-card" }, [
+      node("header", {}, [
+        node("strong", { text: title }),
+        node("button", {
+          className: "button button--quiet",
+          attrs: {
+            type: "button",
+            "data-action": "copy-command",
+            "data-command": command,
+          },
+        }, [node("span", { text: "Скопировать" })]),
+      ]),
+      node("pre", { text: command }),
+      note ? node("small", { text: note }) : null,
+    ].filter(Boolean));
+  }
+
+  function renderClients() {
+    const data = ui.clients;
+    const grid = $("#client-grid");
+    const commands = $("#connect-commands");
+    if (!grid || !commands) return;
+    const port = ui.state?.server?.port || 8765;
+    const baseUrl = data?.bridge_url || `http://127.0.0.1:${port}`;
+    $("#connect-base-url").textContent = baseUrl;
+    $("#connect-model").textContent = data?.model || "claude-web";
+    const ready = Boolean(ui.state?.health?.ok);
+    $("#connect-bridge-state").replaceChildren(
+      node("span", { className: "status-inline" }, [
+        node("span", {
+          className: `status-dot status-dot--${ready ? "healthy" : "warning"}`,
+        }),
+        node("span", {
+          text: ready
+            ? "Готов принимать запросы"
+            : "Браузерная сессия не готова",
+        }),
+      ]),
+    );
+
+    grid.replaceChildren();
+    (data?.clients || []).forEach((client) => {
+      const label = connectionLabels[client.connection] || connectionLabels.unset;
+      const actions = node("div", { className: "client-actions" });
+      if (client.installed) {
+        actions.append(
+          node("button", {
+            className: "button button--outline",
+            text: client.connection === "bridge"
+              ? "Настроить заново"
+              : "Настроить на мост",
+            attrs: {
+              type: "button",
+              "data-action": "configure-client",
+              "data-client-id": client.id,
+            },
+          }),
+        );
+      } else if (client.can_install) {
+        actions.append(
+          node("button", {
+            className: "button button--primary",
+            text: "Установить",
+            attrs: {
+              type: "button",
+              "data-action": "install-client",
+              "data-client-id": client.id,
+            },
+          }),
+        );
+      }
+
+      const facts = node("dl", { className: "client-facts" });
+      const addFact = (term, value) => {
+        facts.append(node("dt", { text: term }));
+        facts.append(node("dd", { text: value }));
+      };
+      addFact(
+        "Версия",
+        client.version || (client.installed ? "не определилась" : "не установлен"),
+      );
+      addFact("Смотрит на", client.base_url || "—");
+      addFact("Модель", client.model || "—");
+      if (client.config_path) addFact("Настройки", client.config_path);
+
+      const parts = [
+        node("header", { className: "client-card-header" }, [
+          node("div", {}, [
+            node("h2", { text: client.name }),
+            node("span", { className: "status-inline" }, [
+              node("span", { className: `status-dot status-dot--${label.kind}` }),
+              node("span", { text: label.text }),
+            ]),
+          ]),
+          actions,
+        ]),
+        facts,
+      ];
+      if (client.version_error) {
+        parts.push(
+          node("p", {
+            className: "client-note client-note--warning",
+            text: `Версию прочитать не удалось: ${client.version_error}`,
+          }),
+        );
+      }
+      (client.notes || []).forEach((note) => {
+        parts.push(node("p", { className: "client-note", text: note }));
+      });
+      parts.push(
+        node("p", {
+          className: "client-install-state",
+          attrs: { "data-install-state": client.id },
+          text: "",
+        }),
+      );
+
+      grid.append(node("article", { className: "panel client-card" }, parts));
+    });
+
+    commands.replaceChildren(
+      commandBlock(
+        "PowerShell",
+        [
+          `$env:ANTHROPIC_BASE_URL = "${baseUrl}"`,
+          `$env:ANTHROPIC_AUTH_TOKEN = "local-claude-web"`,
+          `claude --model claude-web`,
+        ].join("\n"),
+        "Для OpenClaude замените последнюю строку на openclaude --model claude-web.",
+      ),
+      commandBlock(
+        "bash / zsh",
+        [
+          `export ANTHROPIC_BASE_URL="${baseUrl}"`,
+          `export ANTHROPIC_AUTH_TOKEN="local-claude-web"`,
+          `claude --model claude-web`,
+        ].join("\n"),
+        "",
+      ),
+    );
+  }
+
+  async function configureClient(clientId, button) {
+    button.disabled = true;
+    try {
+      const result = unwrap(
+        await request(`/clients/${clientId}/configure`, { method: "POST" }),
+      );
+      const backups = (result.backups || []).length;
+      toast(
+        backups
+          ? `Клиент настроен на мост; прежние настройки сохранены (${backups})`
+          : "Клиент настроен на мост",
+        "success",
+      );
+      await refreshClients({ quiet: true });
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function pollInstall(clientId, note) {
+    for (let attempt = 0; attempt < 180; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      let state;
+      try {
+        state = unwrap(await request(`/clients/${clientId}/install`));
+      } catch {
+        continue;
+      }
+      if (state.status !== "running") {
+        if (note) {
+          note.textContent = state.status === "completed"
+            ? "Установлено"
+            : `Ошибка установки: ${(state.output || "").slice(-300)}`;
+        }
+        return state;
+      }
+    }
+    if (note) note.textContent = "Установка идёт дольше обычного";
+    return null;
+  }
+
+  async function installClient(clientId, button) {
+    button.disabled = true;
+    const note = $(`[data-install-state="${clientId}"]`);
+    if (note) note.textContent = "Устанавливаем…";
+    try {
+      unwrap(await request(`/clients/${clientId}/install`, { method: "POST" }));
+      const finished = await pollInstall(clientId, note);
+      if (finished?.status === "completed") {
+        toast("Клиент установлен", "success");
+        await refreshClients({ quiet: true });
+      } else {
+        toast("Установка не удалась, подробности в карточке", "error");
+      }
+    } catch (error) {
+      toast(error.message, "error");
+      if (note) note.textContent = "";
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   function renderProfiles() {
     const body = $("#profiles-table-body");
     const empty = $("#profiles-empty");
@@ -903,6 +1139,10 @@
         );
       }
 
+      actions.append(
+        actionButton("Прокси", "open-proxy-dialog", profile.id, "quiet"),
+      );
+
       const accountText = account.name
         ? account.email
           ? `${account.name} (${account.email})`
@@ -920,12 +1160,127 @@
           ]),
           node("td", { text: accountText }),
           node("td", { text: profile.model && profile.model !== "auto" ? profile.model : "Автоматически" }),
+          node("td", {}, [proxyCell(profile)]),
           node("td", {}, [authStatus]),
           node("td", { text: formatTime(profile.last_checked_at, true) }),
           node("td", {}, [actions]),
         ]),
       );
     });
+  }
+
+  function profileProxy(profile) {
+    const row = profile?.proxy;
+    return row && typeof row === "object" ? row : {};
+  }
+
+  function proxyCell(profile) {
+    const proxy = profileProxy(profile);
+    if (!proxy.enabled || !proxy.server) {
+      return node("span", { className: "proxy-cell proxy-cell--direct", text: "Напрямую" });
+    }
+    return node("span", { className: "status-inline proxy-cell" }, [
+      node("span", { className: "status-dot status-dot--healthy" }),
+      node("span", { text: proxy.server }),
+    ]);
+  }
+
+  function openProxyDialog(profileId) {
+    const profile = profiles().find((row) => row.id === profileId);
+    if (!profile) return;
+    const proxy = profileProxy(profile);
+    ui.proxyProfileId = profileId;
+    $("#proxy-dialog-title").textContent = `Прокси · ${profile.name || profile.id}`;
+    $("#proxy-enabled").checked = Boolean(proxy.enabled);
+    $("#proxy-server").value = proxy.server || "";
+    $("#proxy-username").value = proxy.username || "";
+    $("#proxy-password").value = "";
+    $("#proxy-password-hint").textContent = proxy.password_set
+      ? "Пароль сохранён. Пусто — останется прежним."
+      : "Пароль не сохранён.";
+    setProxyResult(null);
+    const dialog = $("#proxy-dialog");
+    if (!dialog.open) dialog.showModal();
+  }
+
+  function closeProxyDialog() {
+    ui.proxyProfileId = null;
+    const dialog = $("#proxy-dialog");
+    if (dialog.open) dialog.close();
+  }
+
+  function setProxyResult(text, kind = "muted") {
+    const element = $("#proxy-result");
+    element.hidden = !text;
+    element.textContent = text || "";
+    element.className = `proxy-result proxy-result--${kind}`;
+  }
+
+  function proxyFormPayload() {
+    const password = $("#proxy-password").value;
+    const payload = {
+      enabled: $("#proxy-enabled").checked,
+      server: $("#proxy-server").value.trim(),
+      username: $("#proxy-username").value.trim(),
+    };
+    // An empty box means "keep the stored password", so it is omitted rather
+    // than sent as an empty string, which would clear it.
+    if (password) payload.password = password;
+    return payload;
+  }
+
+  async function testProxy(button) {
+    const profileId = ui.proxyProfileId;
+    if (!profileId) return;
+    button.disabled = true;
+    setProxyResult("Проверяем соединение…");
+    try {
+      const payload = unwrap(
+        await request(`/profiles/${profileId}/proxy/test`, {
+          method: "POST",
+          body: JSON.stringify(proxyFormPayload()),
+        }),
+      );
+      const result = payload.result || {};
+      if (result.ok) {
+        setProxyResult(
+          `Выход через ${result.exit_ip} · ${result.latency_ms} мс`,
+          "healthy",
+        );
+      } else {
+        setProxyResult(result.error || "Прокси не ответил", "error");
+      }
+    } catch (error) {
+      setProxyResult(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function saveProxy(button) {
+    const profileId = ui.proxyProfileId;
+    if (!profileId) return;
+    button.disabled = true;
+    try {
+      const payload = unwrap(
+        await request(`/profiles/${profileId}/proxy`, {
+          method: "PUT",
+          body: JSON.stringify(proxyFormPayload()),
+        }),
+      );
+      toast(
+        payload.restarted
+          ? "Прокси сохранён, браузер профиля перезапущен"
+          : "Прокси сохранён",
+        "success",
+      );
+      closeProxyDialog();
+      await refreshState({ quiet: true });
+    } catch (error) {
+      setProxyResult(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
   }
 
   function actionButton(text, action, profileId, variant = "quiet") {
@@ -2272,6 +2627,30 @@
     } else if (action === "open-profile-login") {
       const profile = profiles().find((row) => row.id === button.dataset.profileId);
       if (profile) openProfileDrawer(profile);
+    } else if (action === "refresh-clients") {
+      button.disabled = true;
+      refreshClients()
+        .then(() => toast("Состояние клиентов обновлено", "success"))
+        .finally(() => {
+          button.disabled = false;
+        });
+    } else if (action === "configure-client") {
+      configureClient(button.dataset.clientId, button);
+    } else if (action === "install-client") {
+      installClient(button.dataset.clientId, button);
+    } else if (action === "copy-command") {
+      navigator.clipboard
+        ?.writeText(button.dataset.command || "")
+        .then(() => toast("Скопировано", "success"))
+        .catch(() => toast("Буфер обмена недоступен", "error"));
+    } else if (action === "open-proxy-dialog") {
+      openProxyDialog(button.dataset.profileId);
+    } else if (action === "close-proxy-dialog") {
+      closeProxyDialog();
+    } else if (action === "test-proxy") {
+      testProxy(button);
+    } else if (action === "save-proxy") {
+      saveProxy(button);
     } else if (action === "activate-profile") {
       activateProfile(button.dataset.profileId, button);
     } else if (action === "select-model-profile") {
@@ -2416,6 +2795,12 @@
     });
     $("#history-dialog").addEventListener("click", (event) => {
       if (event.target === event.currentTarget) closeHistoryDetail();
+    });
+    $("#proxy-dialog").addEventListener("click", (event) => {
+      if (event.target === event.currentTarget) closeProxyDialog();
+    });
+    $("#proxy-dialog").addEventListener("close", () => {
+      ui.proxyProfileId = null;
     });
 
     $$("[data-behavior-key]").forEach((control) => {

@@ -19,6 +19,8 @@ EXPECTED_PATHS = {
     "/api/control/profiles/{profile_id}/activate",
     "/api/control/profiles/{profile_id}/login",
     "/api/control/profiles/{profile_id}/model",
+    "/api/control/profiles/{profile_id}/proxy",
+    "/api/control/profiles/{profile_id}/proxy/test",
     "/api/control/state",
     "/api/control/telemetry",
     "/api/control/telemetry/settings",

@@ -7,9 +7,12 @@ import os
 import re
 import sys
 import time
+from pathlib import Path
+from typing import Any
 
 from camoufox.async_api import AsyncCamoufox
 
+from claude_web_api.control import proxy as proxy_settings
 from claude_web_api.session.errors import ClaudeBrowserUnavailableError
 from claude_web_api.session.patterns import (
     COMPLETION_PATH_RE,
@@ -61,6 +64,27 @@ class BrowserLifecycleMixin(SessionState):
         if self._phase in {"starting_browser", "recovering_browser"}:
             max_age = self._browser_start_timeout + 30.0
         return time.monotonic() - self._watchdog_heartbeat_at <= max_age
+    def launch_options(self, profile_dir: Path) -> dict[str, Any]:
+        """Camoufox arguments for the profile that is about to start."""
+        options: dict[str, Any] = {
+            "headless": self.headless,
+            "persistent_context": True,
+            "user_data_dir": str(profile_dir),
+            # Camoufox currently treats bool as a numeric maxTime and
+            # serializes True, which the browser rejects as non-double.
+            "humanize": self._humanize_seconds or False,
+        }
+        outbound = proxy_settings.launch_options(
+            self.profile_specs[self.profile_index].get("proxy")
+        )
+        if outbound:
+            # geoip lets Camoufox derive locale, timezone and WebRTC address
+            # from the proxy exit, so the profile does not carry this machine's
+            # own fingerprint out through someone else's IP.
+            options["proxy"] = outbound
+            options["geoip"] = True
+        return options
+
     async def start(self) -> None:
         self._stopping = False
         self._session_epoch += 1
@@ -82,14 +106,7 @@ class BrowserLifecycleMixin(SessionState):
         profile_dir = self.profile_dirs[self.profile_index]
         profile_dir.mkdir(parents=True, exist_ok=True)
         try:
-            self._camoufox = AsyncCamoufox(
-                headless=self.headless,
-                persistent_context=True,
-                user_data_dir=str(profile_dir),
-                # Camoufox currently treats bool as a numeric maxTime and
-                # serializes True, which the browser rejects as non-double.
-                humanize=self._humanize_seconds or False,
-            )
+            self._camoufox = AsyncCamoufox(**self.launch_options(profile_dir))
             self._context = await asyncio.wait_for(
                 self._camoufox.__aenter__(),
                 timeout=min(self._browser_start_timeout, 90.0),

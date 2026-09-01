@@ -13,6 +13,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from claude_web_api.control import proxy as proxy_settings
 from claude_web_api.paths import (
     CONTROL_CONFIG_FILE as CONFIG_PATH,
 )
@@ -406,6 +407,7 @@ def _default_profile_rows() -> list[dict[str, Any]]:
                 "name": "Основной" if index == 0 else f"Профиль {index + 1}",
                 "path": str(path.resolve()),
                 "provider": DEFAULT_PROFILE_PROVIDER,
+                "proxy": dict(proxy_settings.DISABLED),
                 "project_id": project_id if index == 0 else None,
                 "model": "auto",
                 "models": [],
@@ -516,6 +518,10 @@ class ControlConfig:
                 raise ValueError(
                     f"profile {profile_id!r}: {exc}"
                 ) from exc
+            try:
+                profile_proxy = proxy_settings.normalize(raw.get("proxy"))
+            except ValueError as exc:
+                raise ValueError(f"profile {profile_id!r}: {exc}") from exc
             account = raw.get("account")
             if not isinstance(account, dict):
                 account = {}
@@ -528,6 +534,7 @@ class ControlConfig:
                     "name": str(raw.get("name", "") or profile_id)[:80],
                     "path": str(Path(path).expanduser().resolve()),
                     "provider": provider,
+                    "proxy": profile_proxy,
                     "project_id": (
                         str(raw.get("project_id") or "").strip() or None
                     ),
@@ -664,6 +671,9 @@ class ControlConfig:
             for profile in payload.get("profiles", []):
                 if isinstance(profile, dict):
                     profile.pop("account_fingerprint", None)
+                    profile["proxy"] = proxy_settings.public(
+                        profile.get("proxy")
+                    )
                     project_id = str(profile.pop("project_id", "") or "")
                     organization_id = str(
                         profile.pop("organization_id", "") or ""
@@ -690,6 +700,7 @@ class ControlConfig:
                     "project_id": row.get("project_id"),
                     "organization_id": row.get("organization_id"),
                     "model": row.get("model", "auto"),
+                    "proxy": deepcopy(row.get("proxy")),
                 }
                 for row in self._data["profiles"]
             ]
@@ -738,6 +749,7 @@ class ControlConfig:
                 "name": clean_name[:80],
                 "path": str(profile_path),
                 "provider": provider,
+                "proxy": dict(proxy_settings.DISABLED),
                 "project_id": None,
                 "organization_id": None,
                 "model": "auto",
@@ -767,6 +779,7 @@ class ControlConfig:
         allowed = {
             "name",
             "provider",
+            "proxy",
             "project_id",
             "organization_id",
             "model",
@@ -787,6 +800,13 @@ class ControlConfig:
             for row in self._data["profiles"]:
                 if row["id"] != profile_id:
                     continue
+                if "proxy" in normalized_updates:
+                    # An edit arrives without the password the panel never
+                    # received, so the stored one is merged back in here.
+                    normalized_updates["proxy"] = proxy_settings.normalize(
+                        normalized_updates["proxy"],
+                        row.get("proxy"),
+                    )
                 for key, value in normalized_updates.items():
                     if key in allowed:
                         row[key] = value

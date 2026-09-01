@@ -48,6 +48,9 @@ SECRET_TOKEN_RE = re.compile(
     r"eyJ[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}"
     r")\b"
 )
+URL_CREDENTIALS_RE = re.compile(
+    r"(?i)([a-z][a-z0-9+.-]*://)([^\s/@:]+):([^\s/@]+)@"
+)
 PRIVATE_KEY_RE = re.compile(
     r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?"
     r"-----END [A-Z0-9 ]*PRIVATE KEY-----",
@@ -66,6 +69,7 @@ def sanitize_public_text(value: Any, limit: int = 1_000) -> str:
     text = SECRET_HEADER_RE.sub(r"\1\2<redacted>", text)
     text = JSON_SECRET_RE.sub(r"\1\2<redacted>\2", text)
     text = SECRET_ASSIGNMENT_RE.sub(r"\1\2<redacted>", text)
+    text = URL_CREDENTIALS_RE.sub(r"\1\2:<redacted>@", text)
     text = SECRET_TOKEN_RE.sub("<redacted-token>", text)
     text = PRIVATE_KEY_RE.sub("<redacted-private-key>", text)
     return text[:limit]

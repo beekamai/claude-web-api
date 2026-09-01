@@ -127,6 +127,7 @@ class ClaudeSession(
                         str(row.get("organization_id") or "").strip() or None
                     ),
                     "model": str(row.get("model") or "auto"),
+                    "proxy": row.get("proxy"),
                 }
                 for index, row in enumerate(profiles)
                 if isinstance(row, dict) and row.get("path")
@@ -153,6 +154,7 @@ class ClaudeSession(
                     else None,
                     "organization_id": None,
                     "model": "auto",
+                    "proxy": None,
                 }
                 for index, path in enumerate(profile_paths)
             ]
@@ -351,6 +353,7 @@ class ClaudeSession(
                     str(row.get("organization_id") or "").strip() or None
                 ),
                 "model": str(row.get("model") or "auto"),
+                "proxy": row.get("proxy"),
             }
             for index, row in enumerate(profiles)
             if isinstance(row, dict) and row.get("path")

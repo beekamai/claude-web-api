@@ -105,6 +105,9 @@
           <a class="nav-item is-active" href="#overview" data-route="overview" aria-label="Обзор">
             <svg><use href="#icon-overview"/></svg><span>Обзор</span>
           </a>
+          <a class="nav-item" href="#connect" data-route="connect" aria-label="Подключение">
+            <svg><use href="#icon-external"/></svg><span>Подключение</span>
+          </a>
           <a class="nav-item" href="#profiles" data-route="profiles" aria-label="Профили">
             <svg><use href="#icon-users"/></svg><span>Профили</span>
           </a>
@@ -124,7 +127,10 @@
             <span class="status-dot status-dot--muted"></span>
             <span>Проверяем сервис…</span>
           </div>
-          <span class="app-version" id="app-version"></span>
+          <div class="sidebar-footer-row">
+            <span class="app-version" id="app-version"></span>
+            <button class="language-toggle" type="button" data-language-toggle>EN</button>
+          </div>
         </div>
       </aside>
 
@@ -272,6 +278,45 @@
           </section>
         </section>
 
+        <section class="page" data-page="connect" aria-labelledby="connect-title">
+          <header class="page-header">
+            <div>
+              <h1 id="connect-title">Подключение</h1>
+              <p class="page-subtitle">Как направить кодового клиента на этот мост.</p>
+            </div>
+            <button class="button button--quiet" type="button" data-action="refresh-clients">
+              <svg><use href="#icon-refresh"/></svg>Проверить снова
+            </button>
+          </header>
+
+          <section class="panel connect-intro">
+            <div class="connect-intro-body">
+              <h2>Адрес моста</h2>
+              <p>
+                Клиент обращается к мосту как к обычному Anthropic API. Ключ не
+                проверяется: мост слушает только петлевой интерфейс.
+              </p>
+              <dl class="connect-facts">
+                <div><dt>Базовый URL</dt><dd><code id="connect-base-url">—</code></dd></div>
+                <div><dt>Модель</dt><dd><code id="connect-model">claude-web</code></dd></div>
+                <div><dt>Состояние</dt><dd id="connect-bridge-state">—</dd></div>
+              </dl>
+            </div>
+          </section>
+
+          <div class="client-grid" id="client-grid"></div>
+
+          <section class="panel">
+            <header class="panel-header">
+              <div>
+                <h2>Команды вручную</h2>
+                <p>Если настраиваете клиент сами или на другой машине.</p>
+              </div>
+            </header>
+            <div class="command-list" id="connect-commands"></div>
+          </section>
+        </section>
+
         <section class="page" data-page="profiles" aria-labelledby="profiles-title">
           <header class="page-header">
             <div>
@@ -288,12 +333,34 @@
               <table class="data-table profile-table">
                 <thead>
                   <tr>
-                    <th>Профиль</th><th>Провайдер</th><th>Аккаунт</th><th>Модель</th><th>Состояние</th><th>Последняя проверка</th><th><span class="sr-only">Действия</span></th>
+                    <th>Профиль</th><th>Провайдер</th><th>Аккаунт</th><th>Модель</th><th>Выход в сеть</th><th>Состояние</th><th>Последняя проверка</th><th><span class="sr-only">Действия</span></th>
                   </tr>
                 </thead>
                 <tbody id="profiles-table-body"></tbody>
               </table>
               <div class="table-empty" id="profiles-empty">Профили не найдены</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header class="panel-header">
+              <div>
+                <h2>Как это работает</h2>
+              </div>
+            </header>
+            <div class="guide-grid">
+              <article class="guide-card">
+                <h3>Один аккаунт — один профиль</h3>
+                <p>У каждого профиля свой браузер Camoufox с отдельными cookies. Добавьте профиль, войдите в claude.ai в открывшемся окне — панель сама проверит вход и прочитает доступные модели.</p>
+              </article>
+              <article class="guide-card">
+                <h3>Ротация при лимите</h3>
+                <p>Когда активный аккаунт упирается в лимит, мост сам переключается на следующий готовый профиль и повторяет запрос. Ограниченный профиль отдыхает час и снова становится доступен.</p>
+              </article>
+              <article class="guide-card">
+                <h3>Свой выход для каждого</h3>
+                <p>Кнопка «Прокси» задаёт профилю собственный socks5 или http(s)-адрес с логином и паролем. Вход и рабочая сессия идут через него, а таймзона и WebRTC подстраиваются под точку выхода.</p>
+              </article>
             </div>
           </section>
         </section>
@@ -770,8 +837,42 @@
       </p>
     </dialog>
 
+    <dialog class="history-dialog proxy-dialog" id="proxy-dialog" aria-labelledby="proxy-dialog-title">
+      <header class="drawer-header">
+        <div>
+          <h2 id="proxy-dialog-title">Прокси профиля</h2>
+          <p id="proxy-dialog-subtitle">Через этот адрес профиль выходит в сеть — и вход, и рабочая сессия.</p>
+        </div>
+        <button class="icon-button" type="button" data-action="close-proxy-dialog" aria-label="Закрыть">
+          <svg><use href="#icon-close"/></svg>
+        </button>
+      </header>
+
+      <form id="proxy-form" class="profile-form proxy-form">
+        <label class="proxy-toggle">
+          <input id="proxy-enabled" type="checkbox">
+          <span>Выпускать этот профиль через прокси</span>
+        </label>
+        <label for="proxy-server">Адрес</label>
+        <input id="proxy-server" type="text" maxlength="300" autocomplete="off" spellcheck="false" placeholder="socks5://host:1080">
+        <p class="field-hint">socks5, http или https. Можно вставить строку целиком: <code>socks5://логин:пароль@host:1080</code></p>
+        <label for="proxy-username">Логин</label>
+        <input id="proxy-username" type="text" maxlength="200" autocomplete="off" spellcheck="false">
+        <label for="proxy-password">Пароль</label>
+        <input id="proxy-password" type="password" maxlength="400" autocomplete="new-password">
+        <p class="field-hint" id="proxy-password-hint">Пусто — сохранённый пароль останется прежним.</p>
+        <p class="proxy-result" id="proxy-result" role="status" hidden></p>
+        <div class="drawer-actions">
+          <button class="button button--primary" type="button" data-action="save-proxy">Сохранить и применить</button>
+          <button class="button button--outline" type="button" data-action="test-proxy">Проверить выход</button>
+        </div>
+        <p class="field-hint">Сохранение перезапускает браузер активного профиля: иначе он продолжит ходить со старого адреса.</p>
+      </form>
+    </dialog>
+
     <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
 
+    <script src="/control/assets/i18n.js" defer></script>
     <script src="/control/assets/app.js" defer></script>
   </body>
 </html>

@@ -74,8 +74,13 @@ class FakeCamoufox:
 class FakeChromeEnrollmentBrowser:
     instances: list["FakeChromeEnrollmentBrowser"] = []
 
-    def __init__(self, profile_path: Path) -> None:
+    def __init__(
+        self,
+        profile_path: Path,
+        outbound_proxy: dict[str, object] | None = None,
+    ) -> None:
         self.profile_path = profile_path
+        self.outbound_proxy = outbound_proxy
         self.page = FakePage()
         self.context = FakeContext(self.page)
         self.closed = False

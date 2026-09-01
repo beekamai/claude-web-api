@@ -909,11 +909,11 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         native_session._account_uuid = (
             "973252f0-fc29-4a8d-a60d-5ca8241ebfcf"
         )
-        native_session._account_name = "Bulgay"
+        native_session._account_name = "Sample User"
         native_session._account_email_masked = "be***@example.test"
         snapshot = native_session.health_snapshot()
         self.assertTrue(snapshot["ok"])
-        self.assertEqual("Bulgay", snapshot["account"]["name"])
+        self.assertEqual("Sample User", snapshot["account"]["name"])
         self.assertEqual("241ebfcf", snapshot["account"]["uuid_suffix"])
         self.assertNotIn(
             native_session._account_uuid,
@@ -927,7 +927,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             "profile_id": "default",
             "account": {
                 "authenticated": True,
-                "name": "Bulgay",
+                "name": "Sample User",
                 "email": "be***@example.test",
                 "uuid_suffix": "241ebfcf",
             },

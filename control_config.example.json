@@ -8,6 +8,12 @@
       "name": "Основной",
       "path": "<absolute path to the browser profile directory>",
       "provider": "claude_web",
+      "proxy": {
+        "enabled": false,
+        "server": "",
+        "username": "",
+        "password": ""
+      },
       "project_id": null,
       "organization_id": null,
       "model": "auto",

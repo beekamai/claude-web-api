@@ -1100,8 +1100,11 @@ textarea:focus-visible,
 
 .profile-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 5px;
+  max-width: 230px;
+  margin-left: auto;
 }
 
 .profile-actions .button {
@@ -2698,4 +2701,225 @@ textarea:focus-visible,
 .last-turn-note {
   font-size: 12px;
   color: var(--muted);
+}
+
+/* Connect page: what a newcomer sees first. */
+.connect-intro-body {
+  padding: 20px 22px;
+}
+
+.connect-intro-body h2 {
+  margin: 0 0 6px;
+}
+
+.connect-intro-body p {
+  margin: 0 0 14px;
+  color: var(--muted);
+  max-width: 62ch;
+}
+
+.connect-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 34px;
+  margin: 0;
+}
+
+.connect-facts dt {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted);
+}
+
+.connect-facts dd {
+  margin: 4px 0 0;
+}
+
+.client-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.client-card {
+  padding: 18px 20px;
+}
+
+.client-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.client-card-header h2 {
+  margin: 0 0 6px;
+  font-size: 17px;
+}
+
+.client-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.client-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 16px;
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.client-facts dt {
+  color: var(--muted);
+}
+
+.client-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.client-note {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.client-note--warning {
+  color: #9a6210;
+}
+
+.client-install-state:empty {
+  display: none;
+}
+
+.client-install-state {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.command-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+  padding: 16px 20px 20px;
+}
+
+.command-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.command-card pre {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f7f9fb;
+  font-size: 12.5px;
+  overflow-x: auto;
+}
+
+.command-card small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.proxy-dialog {
+  max-width: 520px;
+}
+
+.proxy-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-weight: 500;
+}
+
+.proxy-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.proxy-cell {
+  font-size: 12.5px;
+}
+
+.proxy-cell--direct {
+  color: var(--muted);
+}
+
+.proxy-result {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12.5px;
+  word-break: break-word;
+}
+
+.proxy-result--healthy {
+  border-color: #bcd9c4;
+  background: var(--green-soft);
+}
+
+.proxy-result--error {
+  border-color: #efc2bd;
+  background: var(--red-soft);
+  color: #8b3030;
+}
+
+.sidebar-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.language-toggle {
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.language-toggle:hover {
+  color: var(--text);
+  border-color: var(--text);
+}
+
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  padding: 0 20px 20px;
+}
+
+.guide-card h3 {
+  margin: 0 0 6px;
+  font-size: 13.5px;
+}
+
+.guide-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
 }

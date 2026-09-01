@@ -84,8 +84,13 @@ def _installed_chrome_executable() -> str | None:
 class _ChromeEnrollmentBrowser:
     """Lifecycle adapter for one visible, persistent installed-Chrome context."""
 
-    def __init__(self, profile_path: Path) -> None:
+    def __init__(
+        self,
+        profile_path: Path,
+        outbound_proxy: dict[str, Any] | None = None,
+    ) -> None:
         self.profile_path = profile_path
+        self.outbound_proxy = outbound_proxy
         self._playwright_manager: Any = None
         self._playwright: Any = None
         self._context: Any = None
@@ -99,6 +104,8 @@ class _ChromeEnrollmentBrowser:
             "headless": False,
             "no_viewport": True,
         }
+        if self.outbound_proxy:
+            launch_options["proxy"] = self.outbound_proxy
         if executable:
             launch_options["executable_path"] = executable
         else:
@@ -313,6 +320,7 @@ class ProfileEnrollmentManager:
         profile_id: str,
         profile_path: str,
         provider: str = CLAUDE_WEB_PROVIDER,
+        outbound_proxy: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         provider = str(provider or CLAUDE_WEB_PROVIDER).strip().lower()
         if provider not in PROVIDER_ENTRY_URLS:
@@ -338,17 +346,24 @@ class ProfileEnrollmentManager:
                 # window. Keep auth inside an installed Chrome process with a
                 # dedicated persistent profile; no session material leaves it.
                 camoufox: _ChromeEnrollmentBrowser | AsyncCamoufox = (
-                    _ChromeEnrollmentBrowser(path)
+                    _ChromeEnrollmentBrowser(path, outbound_proxy)
                 )
                 browser_engine = "chrome"
             else:
                 # Preserve the established Claude enrollment backend exactly.
-                camoufox = AsyncCamoufox(
-                    headless=False,
-                    persistent_context=True,
-                    user_data_dir=str(path),
-                    humanize=self._humanize_seconds or False,
-                )
+                # The login must leave through the same exit the session will
+                # use later, or the account is enrolled from one address and
+                # then used from another.
+                launch: dict[str, Any] = {
+                    "headless": False,
+                    "persistent_context": True,
+                    "user_data_dir": str(path),
+                    "humanize": self._humanize_seconds or False,
+                }
+                if outbound_proxy:
+                    launch["proxy"] = outbound_proxy
+                    launch["geoip"] = True
+                camoufox = AsyncCamoufox(**launch)
                 browser_engine = "camoufox"
             context = None
             driver_pid = None

@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from claude_web_api import __version__, clients, runtime
+from claude_web_api.control import proxy as proxy_settings
 from claude_web_api.control.config import ControlConfig
 from claude_web_api.paths import PROJECT_INSTRUCTIONS, PROJECT_ROOT
 from claude_web_api.providers.claude_web import CLAUDE_WEB_PROVIDER_ID
@@ -53,6 +54,30 @@ class ProfileCreate(BaseModel):
 
 class ModelSelect(BaseModel):
     model: str = Field(min_length=1, max_length=160)
+
+
+class ProxyPatch(BaseModel):
+    """A profile's outbound proxy.
+
+    ``password`` is omitted, not blanked, when the operator leaves the field
+    untouched: the panel never receives the stored one back, so an absent
+    value means "keep it" and an empty string means "clear it".
+    """
+
+    enabled: bool = False
+    server: str = Field(default="", max_length=300)
+    username: str = Field(default="", max_length=200)
+    password: str | None = Field(default=None, max_length=400)
+
+    def updates(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "enabled": self.enabled,
+            "server": self.server,
+            "username": self.username,
+        }
+        if self.password is not None:
+            payload["password"] = self.password
+        return payload
 
 
 @router.get("/api/control/state")
@@ -396,6 +421,7 @@ async def launch_profile_login(profile_id: str):
             profile_id,
             profile["path"],
             str(profile.get("provider") or CLAUDE_WEB_PROVIDER_ID),
+            proxy_settings.launch_options(profile.get("proxy")),
         )
         runtime.control.update_profile(profile_id, {"status": "auth_pending"})
         if profile.get("provider") == runtime.GROK_WEB_PROVIDER_ID:
@@ -917,6 +943,75 @@ async def select_profile_model(profile_id: str, body: ModelSelect):
         f"Для профиля «{profile['name']}» выбрана модель {body.model}",
     )
     return {"ok": True, "model": updated["model"]}
+
+
+@router.put("/api/control/profiles/{profile_id}/proxy")
+async def update_profile_proxy(profile_id: str, body: ProxyPatch):
+    try:
+        profile = runtime.control.profile(profile_id)
+    except KeyError as exc:
+        raise HTTPException(404, "profile not found") from exc
+    try:
+        updated = runtime.control.update_profile(
+            profile_id,
+            {"proxy": body.updates()},
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    restarted = False
+    if profile_id == runtime.session.current_profile_id():
+        # The running browser holds the old exit address, so an enabled proxy
+        # that is not applied now would keep sending this machine's own IP.
+        native_state = runtime.session.health_snapshot().get("native", {})
+        if isinstance(native_state, dict) and native_state.get("active"):
+            raise HTTPException(
+                409,
+                "cannot restart the profile while Claude is waiting for "
+                "tool_result; the proxy was saved but is not applied yet",
+            )
+        try:
+            await runtime.session.sync_profiles(
+                runtime.runtime_profiles(),
+                profile_id,
+                restart=True,
+            )
+            restarted = True
+        except Exception as exc:
+            raise HTTPException(503, public_error_message(exc)) from exc
+
+    proxy_view = proxy_settings.public(updated.get("proxy"))
+    runtime.telemetry.log(
+        "INFO",
+        "Profiles",
+        f"Прокси профиля «{profile['name']}»: " + (
+            f"включён ({proxy_view['server']})"
+            if proxy_view["enabled"]
+            else "выключен"
+        ),
+    )
+    return {"ok": True, "proxy": proxy_view, "restarted": restarted}
+
+
+@router.post("/api/control/profiles/{profile_id}/proxy/test")
+async def test_profile_proxy(profile_id: str, body: ProxyPatch | None = None):
+    """Connect through the proxy and report the exit address it hands out."""
+    try:
+        profile = runtime.control.profile(profile_id)
+    except KeyError as exc:
+        raise HTTPException(404, "profile not found") from exc
+    stored = profile.get("proxy") or {}
+    candidate = dict(stored)
+    if body is not None and body.server.strip():
+        candidate = {**stored, **body.updates()}
+    try:
+        candidate = proxy_settings.normalize(candidate, stored)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    result = await proxy_settings.check(candidate)
+    if result.get("error"):
+        result["error"] = sanitize_public_text(str(result["error"]))
+    return {"ok": True, "result": result}
 
 
 @router.delete("/api/control/events")
