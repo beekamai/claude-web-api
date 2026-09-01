@@ -44,6 +44,20 @@ to have them.
 
 ## Install
 
+One line in PowerShell — it fetches the repository, builds the portable runtime
+and starts the bridge:
+
+```powershell
+irm https://raw.githubusercontent.com/beekamai/claude-web-api/main/install.ps1 | iex
+```
+
+It installs into `%USERPROFILE%\claude-web-api` (override with
+`$env:CLAUDE_WEB_API_DIR`), and re-running it updates an existing installation
+without touching the browser profile, `control_config.json` or the journal. Set
+`$env:CLAUDE_WEB_API_NO_START = "1"` to install without starting.
+
+Manually, if you prefer:
+
 ```powershell
 git clone https://github.com/beekamai/claude-web-api
 cd claude-web-api
@@ -173,6 +187,20 @@ OpenAI-совместимый клиент — через `/v1/chat/completions`
 возможностей вместо того, чтобы их изображать.
 
 ## Установка
+
+Одна строка в PowerShell — скачает репозиторий, соберёт переносимое окружение
+и запустит мост:
+
+```powershell
+irm https://raw.githubusercontent.com/beekamai/claude-web-api/main/install.ps1 | iex
+```
+
+Ставится в `%USERPROFILE%\claude-web-api` (можно задать `$env:CLAUDE_WEB_API_DIR`).
+Повторный запуск обновляет установку и не трогает браузерный профиль,
+`control_config.json` и журнал. `$env:CLAUDE_WEB_API_NO_START = "1"` — поставить
+без запуска.
+
+Вручную:
 
 ```powershell
 git clone https://github.com/beekamai/claude-web-api
