@@ -14,11 +14,20 @@ if (-not (Test-Path $py)) {
     Write-Error "$hint."
     exit 1
 }
-$browserVersion = & $py -c "from camoufox.pkgman import installed_verstr; print(installed_verstr())" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Camoufox browser missing. Run .\scripts\setup.ps1 first."
+# Windows PowerShell turns any stderr from a native command into a terminating
+# error under Stop, hiding the traceback; run the probe under Continue and
+# judge it by its exit code instead.
+$ErrorActionPreference = "Continue"
+$probe = & $py -c "from camoufox.pkgman import installed_verstr; print(installed_verstr())" 2>&1
+$probeExit = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($probeExit -ne 0) {
+    $probe | ForEach-Object { Write-Host $_ }
+    Write-Error "Camoufox browser is missing or broken in $projectRoot (see above). Run setup.cmd here."
     exit 1
 }
+# stdout arrives as strings, stderr as error records; the version is stdout.
+$browserVersion = ($probe | Where-Object { $_ -is [string] } | Select-Object -Last 1)
 $env:PYTHONPATH = Join-Path $projectRoot "src"
 if ([string]::IsNullOrWhiteSpace($env:CLAUDE_HEADLESS)) {
     $env:CLAUDE_HEADLESS = "1"
