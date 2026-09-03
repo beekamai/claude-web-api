@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import os
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -794,11 +795,128 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_liveness_endpoint_never_touches_browser(self) -> None:
         with patch.object(
             runtime.session,
-            "watchdog_healthy",
+            "watchdog_alive",
             return_value=True,
         ):
             response = await server.health_live()
         self.assertTrue(response["ok"])
+
+    async def test_a_session_awaiting_a_human_stays_live(self) -> None:
+        """The supervisor kills the server when liveness fails. A login, a
+        dead proxy or an open restart circuit is not fixed by killing it —
+        and doing so takes away the panel that would fix it."""
+        native_session = ClaudeSession(headless=True)
+        native_session._watchdog_task = asyncio.current_task()
+        native_session._watchdog_heartbeat_at = time.monotonic()
+        native_session._recovery_exhausted = True
+        native_session._set_phase("auth_required")
+
+        self.assertTrue(native_session.watchdog_alive())
+        self.assertFalse(native_session.watchdog_healthy())
+        with patch.object(runtime, "session", native_session):
+            self.assertTrue((await server.health_live())["ok"])
+        native_session._watchdog_task = None
+
+    async def test_a_stopped_watchdog_still_fails_liveness(self) -> None:
+        native_session = ClaudeSession(headless=True)
+        native_session._watchdog_task = None
+        self.assertFalse(native_session.watchdog_alive())
+
+    async def test_the_restart_circuit_closes_after_its_window(self) -> None:
+        """A burst of failures must not become a permanent outage."""
+        native_session = ClaudeSession(headless=True)
+        native_session._recovery_exhausted = True
+        native_session._restart_times = [
+            time.monotonic() - native_session._restart_window - 1
+        ]
+        self.assertFalse(
+            native_session._restart_circuit_still_open(time.monotonic())
+        )
+        self.assertFalse(native_session._recovery_exhausted)
+
+    async def test_a_recent_burst_keeps_the_circuit_open(self) -> None:
+        native_session = ClaudeSession(headless=True)
+        native_session._recovery_exhausted = True
+        native_session._restart_times = [time.monotonic()]
+        self.assertTrue(
+            native_session._restart_circuit_still_open(time.monotonic())
+        )
+        self.assertTrue(native_session._recovery_exhausted)
+
+    async def test_a_transient_identity_failure_is_retried(self) -> None:
+        """A proxied /api/account call drops now and then; one drop used to
+        park the session in account_unknown until a human intervened."""
+        native_session = ClaudeSession(headless=True)
+        native_session.page = SimpleNamespace(is_closed=lambda: False)
+        answers = [False, True]
+
+        async def once() -> bool:
+            answer = answers.pop(0)
+            native_session._identity_failure_transient = not answer
+            return answer
+
+        attempts = AsyncMock(side_effect=once)
+        with (
+            patch.object(native_session, "_load_account_identity_once", attempts),
+            patch.object(asyncio, "sleep", AsyncMock()),
+        ):
+            self.assertTrue(await native_session._load_account_identity())
+        self.assertEqual(2, attempts.await_count)
+
+    async def test_a_page_that_never_loaded_is_reloaded_while_waiting(
+        self,
+    ) -> None:
+        """A proxy hiccup leaves a blank page with no composer; without a
+        reload the session reports "log in" forever."""
+        native_session = ClaudeSession(headless=True)
+        goto = AsyncMock()
+        with patch.object(native_session, "_goto_start_page", goto):
+            await native_session._reload_waiting_page()
+            await native_session._reload_waiting_page()
+        goto.assert_awaited_once()
+
+    async def test_reloading_does_not_fight_a_real_login_page(self) -> None:
+        native_session = ClaudeSession(headless=True)
+        native_session._waiting_reload_at = time.monotonic()
+        goto = AsyncMock()
+        with patch.object(native_session, "_goto_start_page", goto):
+            await native_session._reload_waiting_page()
+        goto.assert_not_awaited()
+
+    async def test_a_failed_reload_is_reported_not_raised(self) -> None:
+        native_session = ClaudeSession(headless=True)
+        with patch.object(
+            native_session,
+            "_goto_start_page",
+            AsyncMock(side_effect=RuntimeError("proxy refused")),
+        ):
+            await native_session._reload_waiting_page()
+        self.assertIn("proxy refused", native_session._last_error)
+
+    async def test_a_settled_identity_answer_is_not_retried(self) -> None:
+        """claude.ai answered and it is simply another account: repeating the
+        call would only delay telling the operator."""
+        native_session = ClaudeSession(headless=True)
+        native_session.page = SimpleNamespace(is_closed=lambda: False)
+
+        async def once() -> bool:
+            native_session._identity_failure_transient = False
+            return False
+
+        attempts = AsyncMock(side_effect=once)
+        with patch.object(
+            native_session, "_load_account_identity_once", attempts
+        ):
+            self.assertFalse(await native_session._load_account_identity())
+        self.assertEqual(1, attempts.await_count)
+
+    async def test_identity_retries_stop_when_the_page_is_gone(self) -> None:
+        native_session = ClaudeSession(headless=True)
+        native_session.page = SimpleNamespace(is_closed=lambda: True)
+        once = AsyncMock(return_value=False)
+        with patch.object(native_session, "_load_account_identity_once", once):
+            self.assertFalse(await native_session._load_account_identity())
+        self.assertEqual(1, once.await_count)
 
     async def test_models_endpoint_lists_only_verified_available_models(
         self,

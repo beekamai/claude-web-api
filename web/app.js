@@ -338,10 +338,16 @@
           name: "Camoufox",
           status: health.ok
             ? "healthy"
-            : ["auth_required", "account_unknown", "starting_browser", "recovering_browser"].includes(browser.phase)
+            : [
+              "auth_required",
+              "account_unknown",
+              "project_unavailable",
+              "starting_browser",
+              "recovering_browser",
+            ].includes(browser.phase)
               ? "warning"
               : "error",
-          detail: browser.phase || "Нет данных",
+          detail: browserPhaseText(browser),
         },
         {
           id: "watchdog",
@@ -1175,6 +1181,27 @@
         ]),
       );
     });
+  }
+
+  const browserPhases = {
+    idle: "Готов к запросам",
+    starting_browser: "Запускается",
+    recovering_browser: "Восстанавливается",
+    waiting_host_result: "Ждёт результат инструмента",
+    auth_required: "Нужен вход в claude.ai",
+    account_unknown: "Аккаунт не подтверждён",
+    account_changed: "В браузере другой аккаунт",
+    project_unavailable: "Готовит Claude Project",
+    browser_dead: "Браузер недоступен",
+    stopped: "Остановлен",
+  };
+
+  function browserPhaseText(browser) {
+    const phase = String(browser?.phase || "");
+    const label = browserPhases[phase] || phase || "Нет данных";
+    // The phase says what the bridge is waiting for; last_error says why.
+    const reason = String(browser?.last_error || "").trim();
+    return reason && phase !== "idle" ? `${label} · ${reason}` : label;
   }
 
   function profileProxy(profile) {

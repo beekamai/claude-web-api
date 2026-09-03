@@ -182,8 +182,8 @@ async def health():
 @app.get("/health/live")
 async def health_live():
     """Event-loop liveness only; never waits for Playwright or its global lock."""
-    if not runtime.session.watchdog_healthy():
-        raise HTTPException(503, "Camoufox watchdog is unhealthy")
+    if not runtime.session.watchdog_alive():
+        raise HTTPException(503, "Camoufox watchdog stopped ticking")
     return {"ok": True, "watchdog": True, "time": time.time()}
 
 

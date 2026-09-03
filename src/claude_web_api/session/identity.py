@@ -127,8 +127,35 @@ class AccountIdentityMixin(SessionState):
                         safe[key] = child
             return safe or "account_unavailable"
         return str(value)
-    async def _load_account_identity(self) -> bool:
+    async def _load_account_identity(self, attempts: int = 3) -> bool:
+        """Read the account identity, retrying a transient failure.
+
+        One slow or dropped ``/api/account`` call — routine on a proxied
+        connection — used to drop the whole session into ``account_unknown``
+        until somebody pressed a button in the panel.
+        """
+        for attempt in range(attempts):
+            if await self._load_account_identity_once():
+                return True
+            # A parsed answer that simply is not this account will read the
+            # same way next time; only a failed call is worth repeating.
+            if not self._identity_failure_transient or self._page_is_gone():
+                return False
+            if attempt + 1 < attempts:
+                await asyncio.sleep(1.5 * (attempt + 1))
+        return False
+
+    def _page_is_gone(self) -> bool:
+        if self.page is None:
+            return True
+        try:
+            return bool(self.page.is_closed())
+        except Exception:
+            return False
+
+    async def _load_account_identity_once(self) -> bool:
         """Read identity from the authenticated page without exposing cookies."""
+        self._identity_failure_transient = False
         try:
             result = await asyncio.wait_for(
                 self.page.evaluate(
@@ -151,7 +178,16 @@ class AccountIdentityMixin(SessionState):
                     self._model_selector_wait_ms / 1_000 + 15,
                 ),
             )
-        except Exception:
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Name the failure: "identity has not been verified" alone left
+            # the operator guessing between a dead proxy and a lost login.
+            self._last_error = (
+                f"Claude account identity could not be read: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            self._identity_failure_transient = True
             self._clear_account_identity()
             return False
         if (
@@ -159,6 +195,13 @@ class AccountIdentityMixin(SessionState):
             or result.get("status") != 200
             or not isinstance(result.get("profile"), (dict, list))
         ):
+            status = (
+                result.get("status") if isinstance(result, dict) else "no answer"
+            )
+            self._last_error = (
+                f"claude.ai answered the identity request with {status}"
+            )
+            self._identity_failure_transient = True
             self._clear_account_identity()
             return False
         hinted = str(result.get("hinted") or "")

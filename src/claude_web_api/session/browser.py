@@ -57,13 +57,27 @@ class BrowserLifecycleMixin(SessionState):
             self._watchdog_task is not None
             and not self._watchdog_task.done()
         )
-    def watchdog_healthy(self) -> bool:
-        if not self.watchdog_running() or self._recovery_exhausted:
+    def watchdog_alive(self) -> bool:
+        """Whether the supervisor's liveness probe should pass.
+
+        Liveness is about this process, not about the browser: a session that
+        needs a human — a login, a working proxy, an account fix — is answered
+        by the panel, and killing the server would only take that panel away
+        while changing nothing. Only a watchdog that stopped ticking is a
+        reason to restart.
+        """
+        if not self.watchdog_running():
             return False
         max_age = max(30.0, self._watchdog_interval * 4)
         if self._phase in {"starting_browser", "recovering_browser"}:
             max_age = self._browser_start_timeout + 30.0
         return time.monotonic() - self._watchdog_heartbeat_at <= max_age
+
+    def watchdog_healthy(self) -> bool:
+        """Whether the browser side is both supervised and usable."""
+        if self._recovery_exhausted:
+            return False
+        return self.watchdog_alive()
     def launch_options(self, profile_dir: Path) -> dict[str, Any]:
         """Camoufox arguments for the profile that is about to start."""
         options: dict[str, Any] = {
@@ -180,9 +194,12 @@ class BrowserLifecycleMixin(SessionState):
                 )
             except ValueError:
                 configured_ready_timeout = 180.0
+            # A proxied claude.ai can take far longer than a direct one to
+            # paint the composer; giving up early reported "log in" to an
+            # account that was in fact already logged in.
             startup_probe_timeout = max(
                 2.0,
-                min(configured_ready_timeout, 20.0),
+                min(configured_ready_timeout, 60.0),
             )
             composer = None
             probe_deadline = time.monotonic() + startup_probe_timeout
@@ -321,6 +338,10 @@ class BrowserLifecycleMixin(SessionState):
             for started in self._restart_times
             if now - started <= self._restart_window
         ]
+        if not self._restart_times and self._recovery_exhausted:
+            # The restart window has passed: an open circuit that is never
+            # closed again turns a burst of failures into a permanent outage.
+            self._recovery_exhausted = False
         if len(self._restart_times) >= self._restart_limit:
             self._recovery_exhausted = True
             self.ready = False
@@ -414,6 +435,7 @@ class BrowserLifecycleMixin(SessionState):
                         "auth_required",
                         "account_unknown",
                         "account_changed",
+                        "project_unavailable",
                     }:
                         if self.page is None or self.page.is_closed():
                             await self._recover_browser_unlocked(
@@ -436,6 +458,8 @@ class BrowserLifecycleMixin(SessionState):
                         )
                         self._last_probe_at = time.time()
                         self._last_probe_ok = bool(authenticated)
+                        if not authenticated:
+                            await self._reload_waiting_page()
                         if authenticated:
                             await asyncio.wait_for(
                                 self._install_sse_tap(),
@@ -467,6 +491,13 @@ class BrowserLifecycleMixin(SessionState):
                                     self.current_profile_id(),
                                     self._account_uuid,
                                 )
+                            if not await self._sync_trusted_project():
+                                # Restarting the browser cannot conjure a
+                                # Project; retry the call itself instead.
+                                self.ready = False
+                                self._last_error = self._project_sync_error
+                                self._set_phase("project_unavailable")
+                                continue
                             self._browser_dead.clear()
                             self.ready = True
                             self._last_error = None
@@ -565,6 +596,29 @@ class BrowserLifecycleMixin(SessionState):
             f"url={getattr(self.page, 'url', '')!r}; page={page_text!r}. "
             "Log in manually in the browser window, then retry."
         )
+    async def _reload_waiting_page(self) -> None:
+        """Re-open the start page while a session waits for a human.
+
+        The wait is judged by what the current page shows. A page that never
+        finished loading — a proxy hiccup, a transport error — shows no
+        composer and never will, so the session would report "log in" forever
+        against an account that is fine. Reloading is rate-limited because a
+        genuine login page must stay put long enough to be used.
+        """
+        now = time.monotonic()
+        if now - self._waiting_reload_at < self._waiting_reload_interval:
+            return
+        self._waiting_reload_at = now
+        try:
+            await asyncio.wait_for(self._goto_start_page(timeout_ms=45_000), 60)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._last_error = (
+                f"reloading the waiting page failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
     async def _goto_start_page(self, timeout_ms: int = 60_000) -> None:
         """Open a Project through its authenticated list when possible.
 
@@ -650,8 +704,21 @@ class BrowserLifecycleMixin(SessionState):
                 "Camoufox recovery is cooling down after a failed launch; "
                 f"retry in {retry_after}s"
             )
-        if self._recovery_exhausted:
+        if self._recovery_exhausted and self._restart_circuit_still_open(now):
             raise ClaudeBrowserUnavailableError(
                 self._last_error or "Camoufox restart circuit is open"
             )
         await self._recover_browser_unlocked(reason)
+
+    def _restart_circuit_still_open(self, now: float) -> bool:
+        """Whether recent restarts still justify refusing another launch."""
+        recent = [
+            started
+            for started in self._restart_times
+            if now - started <= self._restart_window
+        ]
+        if recent:
+            return True
+        self._recovery_exhausted = False
+        self._restart_times = []
+        return False
